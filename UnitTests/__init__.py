@@ -1,0 +1,8 @@
+"""Reserve standard-library tests for the Phase 1 warehouse contracts.
+
+Owner tests will use deterministic fixtures and isolated filesystem boundaries.
+These modules are placeholders; discovering them currently verifies no runtime
+behavior and must not count as implementation completion.
+"""
+
+# TODO: Add executable tests alongside each owner's implementation.
