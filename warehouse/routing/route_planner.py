@@ -3,6 +3,10 @@
 The default route will retain incoming order and every duplicate occurrence.
 Planning accepts locations rather than requests and never owns picking
 progress, assignments or inventory mutation.
+
+Constructor and plan_route entry/results, known-location validation and route
+occurrences use DEBUG under --debug T. Keep only location_map as planner state;
+console verbosity belongs to the launcher and this query emits no INFO.
 """
 
 from __future__ import annotations

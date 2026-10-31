@@ -3,6 +3,11 @@
 Assignments retain a canonical request and optional staged evidence. Rescans
 compare both observations with N fronts followed by N backs. Content failure
 clears the assignment and returns the same request for picking rework.
+
+Function entry/results, initialized capacity, FIFO assignments, staged/rescanned
+SKU evidence and committed status/rework details use DEBUG under --debug T.
+Preserve WARNING/ERROR for problems and buffer nested diagnostics until related
+updates finish. Emit no INFO outside ActivityLog.record_command.
 """
 
 from __future__ import annotations

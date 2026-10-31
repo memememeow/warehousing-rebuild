@@ -3,6 +3,11 @@
 Product and location validation precede identity allocation. Independent order
 and request counters advance only on acceptance or creation. End-of-input
 closure may form one final partial request and must remain idempotent.
+
+Function entry/results, initialized numeric settings, accepted order IDs,
+request creation and input closure use DEBUG under --debug T, including every
+available order ID. Buffer diagnostics inside related commits; rejections use
+WARNING and invariant failures use ERROR. Emit no separate INFO events.
 """
 
 from __future__ import annotations

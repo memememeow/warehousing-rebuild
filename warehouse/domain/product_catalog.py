@@ -3,6 +3,10 @@
 Lookup keys use trimmed, case-folded product text while accepted orders retain
 their display spelling. Construction must reject normalized collisions and
 freeze a defensive copy so later input mutation cannot change the catalog.
+
+Constructor and lookup entry/results, normalized keys and resolved SKU pairs
+use DEBUG under --debug T. Unknown products retain recoverable rejection
+handling; this query owner emits no INFO and stores no debug-mode setting.
 """
 
 from __future__ import annotations

@@ -3,6 +3,9 @@
 Readers provide canonical zone spelling and nonnegative coordinates. Location
 values are hashable inventory keys; the mapping alias preserves traversal order
 without introducing another application class.
+
+Construction and location-value diagnostics use DEBUG under --debug T, without
+adding logging settings to the immutable address or emitting INFO here.
 """
 
 from __future__ import annotations

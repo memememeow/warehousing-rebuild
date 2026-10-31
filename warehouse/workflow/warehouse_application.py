@@ -4,6 +4,13 @@ The application routes shared requests between their owners, finishes input
 once and drains work before publishing results. It holds explicit dependencies
 without duplicating business collections. Commands retain SKU evidence that
 the operational trace grammar omits.
+
+After each accepted operational command commits, delegate its sole INFO mirror
+and raw trace append to ActivityLog.record_command. Function entry/results,
+handoffs, lifecycle changes and completion details use DEBUG under --debug T;
+F or omission suppresses those details without changing commands or outputs.
+Buffer nested diagnostics until related in-memory updates complete. No debug
+setting belongs in application properties or the Command aliases.
 """
 
 from __future__ import annotations
@@ -81,5 +88,10 @@ class WarehouseApplication:
         ...
 
     def apply_command(self, command: Command) -> None:
-        """Delegate validated actions and handoffs, then log accepted commands."""
+        """Delegate validated actions, then call ActivityLog.record_command.
+
+        Complete related in-memory handoffs before flushing buffered DEBUG
+        details and the accepted command's INFO mirror and trace append.
+        Recoverable rejections use WARNING; application code emits no INFO.
+        """
         ...

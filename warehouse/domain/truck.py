@@ -3,6 +3,10 @@
 LoadingWorkflow supplies truck identifiers and controls order and dispatch.
 Capacity counts requests, including a partial final request. Output consumes
 canonical loaded contents rather than a separate archive of copied orders.
+
+Constructor, capacity/query and load entry/results, initialized capacity and
+committed contents use DEBUG under --debug T. Buffer nested diagnostics until
+the owning loading commit finishes. Problems use WARNING/ERROR; emit no INFO.
 """
 
 from __future__ import annotations

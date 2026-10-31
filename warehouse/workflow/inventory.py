@@ -5,6 +5,11 @@ must decrement and complete any threshold refill before progress advances.
 Reserves are unlimited; sequencing rework never credits previous reductions.
 StockChange records location, before, after decrement and final quantity;
 manual refill uses the reset quantity for both after and final values.
+
+All function entry/results, initialized numeric values, quantity queries, stock
+decrements, threshold decisions, refill changes and snapshots use DEBUG under
+--debug T. Buffer diagnostics until related pick and inventory commits finish;
+problems retain WARNING/ERROR. Inventory emits no INFO lifecycle records.
 """
 
 from __future__ import annotations

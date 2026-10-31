@@ -3,6 +3,10 @@
 The state composes the registry, inventory and three workflow owners after
 preflight. Each owner retains its own authoritative collections, while
 replenisher readiness remains informational and never gates stock refill.
+
+Construction and state diagnostics use DEBUG under --debug T, without adding a
+debug-mode field to the state. Shared owners emit no INFO; accepted operational
+command mirrors belong exclusively to ActivityLog.record_command.
 """
 
 from __future__ import annotations

@@ -3,6 +3,11 @@
 Identity, numeric sequence, orders and expected sequencing evidence are exposed
 read-only. The same request survives every handoff and rework attempt. Status
 transitions must be validated before related workflow collections change.
+
+Constructor, property and query entry/results and committed status transitions
+use DEBUG under --debug T, including all available request and order IDs. Buffer
+nested diagnostics until the owning workflow commit finishes; no direct INFO
+events or debug-mode properties belong on the request.
 """
 
 from __future__ import annotations

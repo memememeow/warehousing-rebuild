@@ -3,6 +3,10 @@
 The snapshot retains catalog references, traversal order, initial overrides,
 employees and identifier settings. Numeric values are startup evidence; runtime
 owners will use their own constants after one-time initialization.
+
+Debug mode is a launcher-only console setting, not a snapshot field. Startup
+and configured-value diagnostics use DEBUG under --debug T; this immutable
+object owns no logging threshold or operational INFO output.
 """
 
 from __future__ import annotations

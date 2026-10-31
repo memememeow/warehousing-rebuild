@@ -3,6 +3,12 @@
 Only the next request sequence may be assigned. A successful final rescan must
 record the load, advance sequence, update status and clear the assignment in
 one commit. Full trucks depart immediately; a partial truck remains loaded.
+
+Function entry/results, initialized identifier settings, assignments, evidence,
+status changes, successful loads, truck dispatch/replacement and partial-truck
+completion details use DEBUG under --debug T. Retain full request/order/truck
+context; buffer nested diagnostics until commits finish. Problems retain
+WARNING/ERROR, while only ActivityLog.record_command emits INFO.
 """
 
 from __future__ import annotations

@@ -4,6 +4,10 @@ Folder naming uses an aware local start time and retries only name collisions.
 Final contents come from canonical loaded trucks and a defensive inventory
 snapshot. Publication must stage all contents and clean failed final artifacts
 where possible while preserving the diagnostic trace.
+
+Function entry/results, chosen absolute paths, row counts and successful final
+publication use DEBUG under --debug T. Folder collisions use WARNING and I/O
+failures use ERROR; this owner emits no INFO command or completion records.
 """
 
 from __future__ import annotations
@@ -24,7 +28,10 @@ class OutputWriter:
     def create_output_directory(
         self, working_directory: Path, started_at: datetime
     ) -> Path:
-        """Create an exclusive local-time run folder with numeric collision suffixes."""
+        """Create an exclusive local-time run folder with numeric collision suffixes.
+
+        Report name collisions at WARNING and the chosen absolute path at DEBUG.
+        """
         ...
 
     def write_orders(self, output_directory: Path, trucks: Sequence[Truck]) -> None:
