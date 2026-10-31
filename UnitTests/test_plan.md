@@ -1,8 +1,8 @@
 # Phase 1 verification plan scaffold
 
 This file reserves the architecture's test plan. Every row describes planned
-coverage; no executable behavior tests have been added. Requirements remain
-unverified until their implementation and relevant tests pass.
+coverage; step 01 CLI boundary tests are in `test_input_readers.py`. Other
+requirements remain unverified until their implementation and relevant tests pass.
 
 Use standard-library unittest, deterministic fixtures, temporary directories and
 mocked clock or I/O boundaries. Initialize numeric settings once per test process;
