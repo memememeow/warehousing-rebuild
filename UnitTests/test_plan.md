@@ -3,13 +3,18 @@
 This file reserves the architecture's test plan. Every row describes planned
 coverage; step 01 CLI boundary tests are in `test_input_readers.py`, and step 02
 console diagnostics and failure cases are in `test_outputs.py`, with constructor
-and callable coverage in `test_state.py`. Other requirements remain unverified
+and callable coverage in `test_state.py`. Step 03 enum contracts, canonical role
+keys, typed consumers, cold imports and diagnostic serialization are exercised
+across those files and `test_workflows.py`. Other requirements remain unverified
 until their implementation and relevant tests pass.
 
 Observed Step 02 results and the status of each numbered requirement are in
 [the Step 02 audit](step_02_audit.md). That audit records current
 callable coverage and explicit later-owner/Step 21 deferrals; the planned rows
 below do not establish completed behavior.
+
+Observed Step 03 requirements, executable evidence and later-owner deferrals
+are recorded in [the Step 03 audit](step_03_audit.md).
 
 Use standard-library unittest, deterministic fixtures, temporary directories and
 mocked clock or I/O boundaries. Initialize numeric settings once per test process;

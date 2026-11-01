@@ -1,4 +1,4 @@
-"""Verify Step 02 constructor diagnostics; reserve composed-state smoke coverage.
+"""Verify shared enums and Step 02 diagnostics; reserve composed-state coverage.
 
 Future tests will verify the five state owners, shared request identity,
 collection isolation and informational replenisher readiness. Fixtures must
@@ -9,20 +9,99 @@ from __future__ import annotations
 
 import ast
 import io
+import json
 import logging
 import re
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import FrozenInstanceError
+from enum import StrEnum
 from pathlib import Path
 
 from UnitTests import assert_callable_traces, isolated_console_logging
 from warehouse.configuration.warehouse_config import WarehouseConfig
 from warehouse.domain.location import Location
 from warehouse.domain.order import Order
+from warehouse.domain.request_status import RequestStatus
+from warehouse.domain.worker_type import WorkerType
 from warehouse.file_io.activity_log import ActivityLog
 from warehouse.launcher import _configure_console_logging, warehouse
 from warehouse.routing.route_planner import RoutePlanner
+
+
+class SharedEnumTests(unittest.TestCase):
+    """Protect the exact vocabulary without implementing request transitions."""
+
+    def test_worker_type_has_exact_str_enum_contract(self) -> None:
+        self.assertEqual(WorkerType.__bases__, (StrEnum,))
+        self.assertEqual(WorkerType.__module__, "warehouse.domain.worker_type")
+        self.assertEqual(
+            {name: member.value for name, member in WorkerType.__members__.items()},
+            {
+                "PICKER": "picker", "SEQUENCER": "sequencer",
+                "LOADER": "loader", "REPLENISHER": "replenisher",
+            },
+        )
+        self.assertEqual(len(WorkerType.__members__), len(WorkerType))
+
+    def test_request_status_has_exact_str_enum_contract(self) -> None:
+        self.assertEqual(RequestStatus.__bases__, (StrEnum,))
+        self.assertEqual(RequestStatus.__module__, "warehouse.domain.request_status")
+        self.assertEqual(
+            {name: member.value for name, member in RequestStatus.__members__.items()},
+            {
+                "CREATED": "created",
+                "WAITING_FOR_PICKING": "waiting_for_picking",
+                "PICKING": "picking",
+                "READY_FOR_SEQUENCING": "ready_for_sequencing",
+                "SEQUENCING": "sequencing",
+                "AWAITING_SEQUENCE_RESCAN": "awaiting_sequence_rescan",
+                "REWORK_REQUIRED": "rework_required",
+                "READY_FOR_LOADING": "ready_for_loading",
+                "LOADING": "loading",
+                "AWAITING_LOAD_RESCAN": "awaiting_load_rescan",
+                "LOADED": "loaded",
+                "DISPATCHED": "dispatched",
+            },
+        )
+        self.assertEqual(len(RequestStatus.__members__), len(RequestStatus))
+
+    def test_every_member_serializes_as_its_string_value(self) -> None:
+        for enum in (WorkerType, RequestStatus):
+            for member in enum:
+                with self.subTest(enum=enum, member=member.name):
+                    self.assertIsInstance(member, str)
+                    self.assertEqual(str(member), member.value)
+                    self.assertEqual(f"{member}", member.value)
+                    self.assertEqual("%s" % member, member.value)
+                    self.assertEqual(json.loads(json.dumps(member)), member.value)
+                    self.assertIs(enum(member.value), member)
+
+    def test_request_status_rejects_unsupported_values(self) -> None:
+        unsupported = (
+            "INCOMPLETE", "incomplete", "FAILED", "failed", "failure",
+            "CANCELLED", "cancelled", "canceled", "awaiting_rescan", "", None, 1,
+        )
+        for value in (*unsupported, *(member.name for member in RequestStatus),
+                      *(f" {member.value} " for member in RequestStatus)):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                RequestStatus(value)
+
+    def test_enum_modules_have_no_custom_methods_or_application_dependencies(self) -> None:
+        domain = Path(__file__).resolve().parent.parent / "warehouse" / "domain"
+        for name in ("worker_type", "request_status"):
+            with self.subTest(module=name):
+                tree = ast.parse((domain / f"{name}.py").read_text(encoding="utf-8"))
+                self.assertFalse(any(
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    for node in ast.walk(tree)
+                ))
+                imports = [
+                    node.module if isinstance(node, ast.ImportFrom) else alias.name
+                    for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+                    for alias in node.names
+                ]
+                self.assertEqual(imports, ["__future__", "enum"])
 
 
 class ConstructorDiagnosticTests(unittest.TestCase):

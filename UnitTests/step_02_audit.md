@@ -83,8 +83,8 @@ standard-library functions are not application-owned callables.
 | `ActivityLog.record_command` | **21**: serializer, sole checked INFO mirror, mirror-before-append ordering, trace file I/O, confirmed trace tracking, exact INFO/log equivalence, trace failures and no later commands. The method remains a stub; no operational INFO path was invented. |
 | `ProductCatalog.__init__`, `resolve_skus` | **04**: normalization, defensive immutability and lookups, with their traces. |
 | `ConfigLoader.load_config`; WarehouseConfig mapping copies/validation | **05**: complete preflight, immutable mappings and validated configuration diagnostics. Current generated construction does not establish these rules. |
-| `OrderReader.read_orders`, `parse_order` | **06**: grammar, source context and reader traces. |
-| Owner numeric settings and their DEBUG initialization | **07**: no initializer or numeric setting behavior added. |
+| `OrderReader.read_orders`, `parse_order` | **07**: grammar, source context and reader traces. |
+| Owner numeric settings and their DEBUG initialization | **06**: no initializer or numeric setting behavior added. |
 | `OutputWriter.create_output_directory` | **08**: exclusive folders, collisions and path diagnostics. |
 | FulfillmentRequest constructor, five properties, `transition_to`, `loading_skus` | **09**: lifecycle/query behavior and nested traces remain stubs. Location/Order acceptance and validation remain with their prescribed callers. |
 | Truck constructor, capacity property, `record_request`, `is_full` | **10**: capacity/load behavior and commit diagnostics remain stubs. |

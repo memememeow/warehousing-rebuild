@@ -1,4 +1,4 @@
-"""Verify CLI startup boundaries; reserve reader and order grammar coverage.
+"""Verify CLI and canonical role contracts; reserve input validation coverage.
 
 Future cases cover launch-relative and config-relative references, absolute
 inputs, missing files, malformed JSON and CSVs, mixed case, normalization
@@ -13,21 +13,60 @@ run-folder creation. Debug verbosity adds no WarehouseConfig field.
 from __future__ import annotations
 
 import io
+import json
 import os
 import runpy
 import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Mapping
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path
+from typing import get_type_hints
 from unittest.mock import patch
 
 from UnitTests import assert_callable_traces, isolated_console_logging
+from warehouse.configuration.warehouse_config import WarehouseConfig
+from warehouse.domain.worker_type import WorkerType
 from warehouse.launcher import _parse_arguments, warehouse
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+class CanonicalRoleTests(unittest.TestCase):
+    """Exercise canonical JSON keys; ConfigLoader normalization belongs to Step 05."""
+
+    def test_canonical_employee_keys_convert_and_lookup_by_enum(self) -> None:
+        saved = {
+            "picker": ["Alice"], "sequencer": ["Bob"],
+            "loader": ["Carol"], "replenisher": ["Dave"],
+        }
+        decoded = json.loads(json.dumps(saved))
+        employees = {WorkerType(role): tuple(names) for role, names in decoded.items()}
+        self.assertTrue(all(type(role) is WorkerType for role in employees))
+        for role, names in saved.items():
+            with self.subTest(role=role):
+                canonical = WorkerType(role)
+                self.assertIs(WorkerType[canonical.name], canonical)
+                self.assertEqual(employees[canonical], tuple(names))
+        self.assertEqual(json.loads(json.dumps(employees)), saved)
+        self.assertEqual(decoded, saved)
+
+    def test_worker_type_rejects_aliases_and_unvalidated_roles(self) -> None:
+        unsupported = ("pickers", "sequencers", "loaders", "replenishers",
+                       "supervisor", "worker", "", None, 1, True)
+        for value in (*unsupported, *(member.name for member in WorkerType),
+                      *(f" {member.value} " for member in WorkerType)):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                WorkerType(value)
+
+    def test_configuration_contract_uses_canonical_enum_keys(self) -> None:
+        self.assertEqual(
+            get_type_hints(WarehouseConfig)["employees"],
+            Mapping[WorkerType, tuple[str, ...]],
+        )
 
 
 class LauncherTests(unittest.TestCase):

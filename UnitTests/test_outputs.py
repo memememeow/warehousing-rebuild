@@ -23,6 +23,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from UnitTests import assert_callable_traces, isolated_console_logging
+from warehouse.domain.request_status import RequestStatus
+from warehouse.domain.worker_type import WorkerType
 from warehouse.file_io.activity_log import ActivityLog
 from warehouse.launcher import _configure_console_logging, warehouse
 
@@ -201,6 +203,33 @@ class ConsoleLoggingTests(unittest.TestCase):
             "source", "sku_evidence", "stock_before",
         ):
             self.assertIn(f"{field}=n/a", self.stderr.getvalue().splitlines()[-1])
+
+    def test_enum_diagnostics_use_canonical_strings_in_all_cli_modes(self) -> None:
+        for options in ([], ["--debug", "F"], ["--debug", "T"]):
+            with self.subTest(options=options):
+                warehouse(["--config", "Config.JSON", "--orders", "Orders.TXT", *options])
+                log = ActivityLog(Path("unused-run"), self.stdout)
+                self.stdout.seek(0)
+                self.stdout.truncate()
+                self.stderr.seek(0)
+                self.stderr.truncate()
+                for enum, field in ((WorkerType, "worker_type"), (RequestStatus, "status_after")):
+                    for member in enum:
+                        context = {field: member}
+                        log.feedback("DEBUG", "warehouse.test", "enum evidence", context)
+                        log.feedback("WARNING", "warehouse.test", "enum evidence", context)
+                debug_lines = self.stdout.getvalue().splitlines()
+                warnings = self.stderr.getvalue().splitlines()
+                members = (*WorkerType, *RequestStatus)
+                self.assertEqual(len(debug_lines), len(members) if "T" in options else 0)
+                self.assertEqual(len(warnings), len(members))
+                for lines, prefix in ((debug_lines, "[DEBUG] "), (warnings, "[WARNING] ")):
+                    for line, member in zip(lines, members):
+                        field = "worker_type" if isinstance(member, WorkerType) else "status_after"
+                        self.assertTrue(line.startswith(prefix))
+                        self.assertIn(f"{field}={member.value} ", line)
+                        self.assertNotIn("WorkerType.", line)
+                        self.assertNotIn("RequestStatus.", line)
 
     def test_mark_incomplete_reports_reason_and_available_trace_context(self) -> None:
         _configure_console_logging(logging.INFO)
