@@ -14,6 +14,7 @@ without recursively tracing its own emit/format functions.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TextIO
@@ -21,7 +22,28 @@ from typing import TYPE_CHECKING, Literal, TextIO
 if TYPE_CHECKING:
     from warehouse.workflow.warehouse_application import Command
 
-# TODO: Preserve command-only INFO, filter DEBUG and propagate checked I/O errors.
+logger = logging.getLogger("warehouse")
+
+
+def _format_context(context: Mapping[str, object]) -> str:
+    """Expand diagnostic evidence without abbreviating collections of IDs."""
+    fields: dict[str, object] = dict.fromkeys(
+        (
+            "run_directory", "request_id", "request_sequence", "order_ids",
+            "truck_id", "worker_type", "worker", "source", "line_number",
+            "path", "row_count", "sku_evidence", "status_before", "status_after",
+            "location", "stock_before", "stock_after",
+        ),
+        "n/a",
+    )
+    fields.update(context)
+    return " ".join(
+        f"{name}={value if value is not None else 'n/a'}"
+        for name, value in fields.items()
+    )
+
+
+# TODO (step 21): Serialize checked INFO mirrors and track confirmed trace appends.
 
 
 class ActivityLog:
@@ -32,7 +54,16 @@ class ActivityLog:
 
     def __init__(self, run_directory: Path, console: TextIO) -> None:
         """Retain the run destination and checked stream used for command mirrors."""
-        ...
+        logger.debug(
+            "function=warehouse.file_io.activity_log.ActivityLog.__init__ action=entry %s",
+            _format_context({"run_directory": run_directory}),
+        )
+        self.run_directory = run_directory
+        self.console = console
+        self.feedback(
+            "DEBUG", "warehouse.file_io.activity_log.ActivityLog.__init__",
+            "action=returned", {},
+        )
 
     def record_command(self, command: Command, context: Mapping[str, object]) -> None:
         """Serialize once; flush [INFO] plus the command before its raw trace append.
@@ -42,6 +73,7 @@ class ActivityLog:
         Emit only after the command commits. A failed mirror adds no trace
         line; a failed append/flush stops work at the last confirmed line.
         """
+        # Step 21 owns command serialization, checked mirroring and trace I/O.
         ...
 
     def feedback(
@@ -51,14 +83,25 @@ class ActivityLog:
         message: str,
         context: Mapping[str, object],
     ) -> None:
-        """Declare DEBUG/WARNING/ERROR feedback and reject INFO before output.
+        """Emit DEBUG/WARNING/ERROR feedback and reject INFO before output.
 
         Retain qualified function names and complete available context. Filter
         DEBUG at the launcher's selected threshold; never recursively trace
         diagnostic transport or emit a command mirror from this method.
         """
-        ...
+        if level not in ("DEBUG", "WARNING", "ERROR"):
+            raise ValueError("feedback level must be DEBUG, WARNING or ERROR; INFO is reserved")
+        severity = getattr(logging, level)
+        if logger.isEnabledFor(severity):
+            logger.log(
+                severity, "function=%s %s %s", function, message,
+                _format_context({"run_directory": self.run_directory, **context}),
+            )
 
     def mark_incomplete(self, reason: str, context: Mapping[str, object]) -> None:
         """Report INCOMPLETE at ERROR with the last confirmed trace context."""
-        ...
+        self.feedback(
+            "ERROR", "warehouse.file_io.activity_log.ActivityLog.mark_incomplete",
+            f"action=aborted result=INCOMPLETE reason={reason!r}",
+            {"last_confirmed_trace_line": "n/a", **context},
+        )

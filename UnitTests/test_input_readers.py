@@ -23,6 +23,7 @@ from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from UnitTests import isolated_console_logging
 from warehouse.launcher import _parse_arguments, warehouse
 
 
@@ -31,6 +32,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 class LauncherTests(unittest.TestCase):
     """Protect argument validation, path handling and the directory bootstrap."""
+
+    def setUp(self) -> None:
+        self.enterContext(isolated_console_logging())
 
     def test_debug_default_and_explicit_choices(self) -> None:
         for options, expected in (
@@ -72,6 +76,7 @@ class LauncherTests(unittest.TestCase):
             "os.chdir",
             "warehouse.launcher.Path.cwd",
             "warehouse.launcher.Path.resolve",
+            "warehouse.launcher._configure_console_logging",
             "warehouse.configuration.config_loader.ConfigLoader.load_config",
             "warehouse.file_io.order_reader.OrderReader.read_orders",
             "warehouse.file_io.output_writer.OutputWriter.create_output_directory",
@@ -159,7 +164,21 @@ class LauncherTests(unittest.TestCase):
                         )
                         self.assertEqual(result.returncode, expected, result.stderr)
                         if expected == 1:
-                            self.assertEqual(result.stdout, "")
+                            if "T" in argv:
+                                lines = result.stdout.splitlines()
+                                self.assertEqual(len(lines), 4, result.stdout)
+                                self.assertTrue(all(line.startswith("[DEBUG] ") for line in lines))
+                                for function in ("warehouse", "_parse_arguments"):
+                                    for action in ("entry", "returned"):
+                                        self.assertIn(
+                                            f"function=warehouse.launcher.{function} "
+                                            f"action={action}",
+                                            result.stdout,
+                                        )
+                            else:
+                                self.assertEqual(result.stdout, "")
+                            self.assertEqual(len(result.stderr.splitlines()), 1)
+                            self.assertTrue(result.stderr.startswith("[ERROR] "))
                             self.assertIn(
                                 "simulation startup is not implemented", result.stderr
                             )

@@ -1,8 +1,9 @@
 # Phase 1 verification plan scaffold
 
 This file reserves the architecture's test plan. Every row describes planned
-coverage; step 01 CLI boundary tests are in `test_input_readers.py`. Other
-requirements remain unverified until their implementation and relevant tests pass.
+coverage; step 01 CLI boundary tests are in `test_input_readers.py`, and step 02
+console diagnostics and failure cases are in `test_outputs.py`. Other requirements
+remain unverified until their implementation and relevant tests pass.
 
 Use standard-library unittest, deterministic fixtures, temporary directories and
 mocked clock or I/O boundaries. Initialize numeric settings once per test process;
@@ -36,6 +37,7 @@ run alternate configurations and timezone cases in separate processes.
 | Ordered loading | LoadingWorkflow | Later-ready requests, invalid staging and invalid final rescans | Only the next numeric sequence loads; retries preserve assignment and committed status | Unit |
 | Truck commit and capacity | Truck, LoadingWorkflow | Duplicate loads, overflow, five requests and one later request | Successful loads commit once; full trucks dispatch and replacement preserves global sequence | Unit |
 | Deterministic completion | WarehouseApplication | Full batches, final partial batch, empty input and blocked work | First configured workers complete each batch; blocked runs report every request and return nonzero | Integration |
+| Console diagnostics (step 02) | Launcher, ActivityLog | Omitted/F/T debug, shared module loggers, repeated setup, invalid feedback levels, write/flush/short-write failures | Thresholds and disjoint streams prevent duplicates; INFO feedback fails before output; transport errors propagate and launcher attempts direct stderr fallback | Unit / integration |
 | Logging and trace grammar | ActivityLog | Every command variant with full contextual identifiers | Exact canonical command mirrors flush before trace append; diagnostics retain all order IDs | Unit |
 | Logging failures | ActivityLog, launcher | Mirror, append and flush failures | Commands stop; mirror failure adds no trace line; last confirmed line is reported | Integration |
 | Run-folder creation | OutputWriter | Existing names and noncollision directory errors | Exclusive creation retries only collisions and preserves earlier runs | Unit |
