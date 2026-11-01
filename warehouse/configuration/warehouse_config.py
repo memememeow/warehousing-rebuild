@@ -11,14 +11,16 @@ object owns no logging threshold or operational INFO output.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 from warehouse.domain.location import Location, LocationMap
 from warehouse.domain.product_catalog import ProductCatalog
 from warehouse.domain.worker_type import WorkerType
 
+logger = logging.getLogger("warehouse")
 # TODO: Copy and freeze mapping inputs before publishing validated settings.
 
 
@@ -52,4 +54,21 @@ class WarehouseConfig:
     first_truck_number: int
 
     request_timestamp_format: str
+
+    def __post_init__(self) -> None:
+        """Trace generated construction without implementing snapshot validation."""
+        if logger.isEnabledFor(logging.DEBUG):
+            settings = {
+                field.name: getattr(self, field.name) for field in fields(self)
+                if field.name != "catalog"
+            }
+            for action in ("entry", "returned"):
+                logger.debug(
+                    "function=warehouse.configuration.warehouse_config.WarehouseConfig."
+                    "__post_init__ action=%s constructor=warehouse.configuration."
+                    "warehouse_config.WarehouseConfig.__init__ settings=%s "
+                    "catalog_type=%s",
+                    action, settings, type(self.catalog).__qualname__,
+                    extra={"row_count": len(self.location_map)},
+                )
 

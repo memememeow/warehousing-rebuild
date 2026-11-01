@@ -22,7 +22,7 @@ from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from UnitTests import isolated_console_logging
+from UnitTests import assert_callable_traces, isolated_console_logging
 from warehouse.file_io.activity_log import ActivityLog
 from warehouse.launcher import _configure_console_logging, warehouse
 
@@ -79,7 +79,8 @@ class ConsoleLoggingTests(unittest.TestCase):
             module_logger.debug("%s debug", name)
             module_logger.warning("%s warning", name)
             module_logger.error("%s error", name)
-        self.assertEqual(len(self.stdout.getvalue().splitlines()), 3)
+        for name in ("warehouse", "warehouse.workflow.inventory", "warehouse.configuration"):
+            self.assertEqual(self.stdout.getvalue().count(f"] {name} debug "), 1)
         self.assertEqual(len(self.stderr.getvalue().splitlines()), 6)
         self.assertEqual(root_console.getvalue(), "")
         self.assertFalse(self.logger.propagate)
@@ -95,9 +96,14 @@ class ConsoleLoggingTests(unittest.TestCase):
             self.logger.debug("replacement debug")
             self.logger.warning("replacement warning")
         self.assertEqual(self.stdout.getvalue(), "")
-        self.assertEqual(self.stderr.getvalue(), "[WARNING] first console\n")
-        self.assertEqual(replacement_stdout.getvalue(), "[DEBUG] replacement debug\n")
-        self.assertEqual(replacement_stderr.getvalue(), "[WARNING] replacement warning\n")
+        for output, prefix in (
+            (self.stderr.getvalue(), "[WARNING] first console "),
+            (replacement_stdout.getvalue(), "[DEBUG] replacement debug "),
+            (replacement_stderr.getvalue(), "[WARNING] replacement warning "),
+        ):
+            matching = [line for line in output.splitlines() if line.startswith(prefix)]
+            self.assertEqual(len(matching), 1, output)
+            self.assertIn("run_directory=n/a", output)
 
     def test_constructor_retains_dependencies_without_filesystem_effects(self) -> None:
         _configure_console_logging(logging.DEBUG)
@@ -112,14 +118,43 @@ class ConsoleLoggingTests(unittest.TestCase):
         self.assertIs(log.console, self.stdout)
         for boundary in (open_file, path_open, mkdir):
             boundary.assert_not_called()
-        lines = self.stdout.getvalue().splitlines()
-        self.assertEqual(len(lines), 2)
-        for line, action in zip(lines, ("entry", "returned")):
-            self.assertIn(
-                "function=warehouse.file_io.activity_log.ActivityLog.__init__ "
-                f"action={action}", line,
-            )
+        assert_callable_traces(self, self.stdout.getvalue(), (
+            "warehouse.file_io.activity_log.ActivityLog.__init__",
+        ))
         self.assertEqual(self.stderr.getvalue(), "")
+
+    def test_launcher_diagnostics_have_complete_context(self) -> None:
+        warehouse(["--config", "Config.JSON", "--orders", "Orders.TXT", "--debug", "T"])
+        for line in (self.stdout.getvalue() + self.stderr.getvalue()).splitlines():
+            with self.subTest(line=line):
+                for field in (
+                    "run_directory", "request_id", "request_sequence", "order_ids",
+                    "truck_id", "worker_type", "worker", "source", "line_number",
+                    "path", "row_count", "sku_evidence", "status_before", "status_after",
+                    "location", "stock_before", "stock_after",
+                ):
+                    self.assertIn(f"{field}=n/a", line)
+                if "function=warehouse.launcher._configure_console_logging " not in line:
+                    self.assertIn("Config.JSON", line)
+                    self.assertIn("Orders.TXT", line)
+
+    def test_logging_setup_helper_has_debug_entry_and_result(self) -> None:
+        _configure_console_logging(logging.DEBUG)
+        assert_callable_traces(self, self.stdout.getvalue(), (
+            "warehouse.launcher._configure_console_logging",
+        ))
+
+    def test_mark_incomplete_helper_has_debug_entry_and_result(self) -> None:
+        _configure_console_logging(logging.DEBUG)
+        log = ActivityLog(Path("unused-run"), self.stdout)
+        log.mark_incomplete("blocked", {"order_ids": ("O0001", "O0002")})
+        assert_callable_traces(self, self.stdout.getvalue(), (
+            "warehouse.file_io.activity_log.ActivityLog.mark_incomplete",
+        ))
+        for line in self.stdout.getvalue().splitlines():
+            if "ActivityLog.mark_incomplete" in line:
+                self.assertIn("order_ids=('O0001', 'O0002')", line)
+                self.assertIn("reason='blocked'", line)
 
     def test_feedback_rejects_info_and_unknown_levels_before_any_output(self) -> None:
         _configure_console_logging(logging.INFO)
@@ -199,10 +234,11 @@ class ConsoleLoggingTests(unittest.TestCase):
                     log = ActivityLog(Path("unused-run"), self.stdout)
                     failing_stream = Mock(wraps=io.StringIO())
                     failure = OSError(f"{stream_name} {operation} failed")
-                    getattr(failing_stream, operation).side_effect = failure
                     stack.enter_context(patch(f"sys.{stream_name}", failing_stream))
                     stack.enter_context(patch.object(logging, "raiseExceptions", False))
                     _configure_console_logging(logging.DEBUG)
+                    failing_stream.reset_mock()
+                    getattr(failing_stream, operation).side_effect = failure
                     with self.assertRaises(OSError) as caught:
                         log.feedback(level, "warehouse.test", "diagnostic", {})
                     self.assertIs(caught.exception, failure)
@@ -213,16 +249,17 @@ class ConsoleLoggingTests(unittest.TestCase):
         _configure_console_logging(logging.INFO)
         log = ActivityLog(Path("unused-run"), self.stdout)
         stream = Mock(wraps=io.StringIO())
-        stream.write.return_value = 1
         with patch("sys.stdout", stream):
             _configure_console_logging(logging.DEBUG)
+            stream.reset_mock()
+            stream.write.return_value = 1
             with self.assertRaisesRegex(OSError, "complete diagnostic"):
                 log.feedback("DEBUG", "warehouse.test", "short write", {})
         stream.flush.assert_not_called()
         closed_stream = io.StringIO()
-        closed_stream.close()
         with patch("sys.stdout", closed_stream):
             _configure_console_logging(logging.DEBUG)
+            closed_stream.close()
             with self.assertRaises(ValueError):
                 log.feedback("DEBUG", "warehouse.test", "closed stream", {})
 
@@ -245,6 +282,72 @@ class LauncherLoggingFailureTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.enterContext(isolated_console_logging())
+
+    def test_logging_setup_failures_use_fallback_before_any_startup_work(self) -> None:
+        for debug in ([], ["--debug", "F"], ["--debug", "T"]):
+            for failure in (OSError("handler setup failed"), ValueError("handler closed")):
+                with self.subTest(debug=debug, failure=failure), ExitStack() as stack:
+                    stack.enter_context(patch(
+                        "warehouse.launcher._configure_console_logging", side_effect=failure
+                    ))
+                    stdout = stack.enter_context(redirect_stdout(io.StringIO()))
+                    stderr = stack.enter_context(redirect_stderr(io.StringIO()))
+                    boundaries = [stack.enter_context(patch(target)) for target in (
+                        "warehouse.launcher.Path.cwd", "warehouse.launcher.Path.resolve",
+                        "builtins.open", "io.open", "os.mkdir",
+                        "warehouse.configuration.config_loader.ConfigLoader.load_config",
+                        "warehouse.file_io.order_reader.OrderReader.read_orders",
+                        "warehouse.domain.warehouse_state.WarehouseState",
+                    )]
+                    result = warehouse([
+                        "--config", "Config.JSON", "--orders", "Orders.TXT", *debug
+                    ])
+                    self.assertEqual(result, 1)
+                    self.assertEqual(stdout.getvalue(), "")
+                    fallback = stderr.getvalue()
+                    self.assertIn("reason=console_logging_failed", fallback)
+                    self.assertIn(str(failure), fallback)
+                    self.assertIn("result=INCOMPLETE", fallback)
+                    self.assertIn("last_confirmed_trace_line=n/a", fallback)
+                    self.assertIn("worker_type=n/a", fallback)
+                    self.assertIn("config_supplied=Config.JSON", fallback)
+                    self.assertIn("orders_supplied=Orders.TXT", fallback)
+                    for boundary in boundaries:
+                        boundary.assert_not_called()
+
+    def test_handler_construction_failure_uses_direct_fallback(self) -> None:
+        with (
+            patch("warehouse.launcher._CheckedStreamHandler", side_effect=OSError("no handler")),
+            redirect_stdout(io.StringIO()) as stdout,
+            redirect_stderr(io.StringIO()) as stderr,
+            patch("warehouse.launcher.Path.cwd") as cwd,
+        ):
+            self.assertEqual(warehouse([
+                "--config", "Config.JSON", "--orders", "Orders.TXT", "--debug", "T"
+            ]), 1)
+        cwd.assert_not_called()
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("reason=console_logging_failed error='no handler'", stderr.getvalue())
+        self.assertIn("config_resolved=n/a", stderr.getvalue())
+        self.assertIn("orders_resolved=n/a", stderr.getvalue())
+        self.assertIn("working_directory=n/a", stderr.getvalue())
+
+    def test_existing_handler_close_failure_uses_direct_fallback(self) -> None:
+        handler = logging.StreamHandler(io.StringIO())
+        logging.getLogger("warehouse").addHandler(handler)
+        with (
+            patch.object(handler, "close", side_effect=ValueError("handler close failed")),
+            redirect_stdout(io.StringIO()) as stdout,
+            redirect_stderr(io.StringIO()) as stderr,
+            patch("warehouse.launcher.Path.cwd") as cwd,
+        ):
+            self.assertEqual(warehouse([
+                "--config", "Config.JSON", "--orders", "Orders.TXT"
+            ]), 1)
+        cwd.assert_not_called()
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("reason=console_logging_failed", stderr.getvalue())
+        self.assertIn("handler close failed", stderr.getvalue())
 
     def test_stdout_failure_stops_diagnostics_and_uses_direct_stderr(self) -> None:
         for operation in ("write", "flush"):

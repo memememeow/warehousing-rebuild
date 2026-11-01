@@ -11,8 +11,24 @@ equivalence remains deferred to step 21 with ActivityLog.record_command.
 from __future__ import annotations
 
 import logging
+import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager
+
+
+def assert_callable_traces(
+    case: unittest.TestCase, output: str, callables: tuple[str, ...]
+) -> None:
+    """Require qualified entry/results without fixing the number of DEBUG records."""
+    lines = output.splitlines()
+    for function in callables:
+        for action in ("entry", "returned"):
+            with case.subTest(function=function, action=action):
+                matching = [
+                    line for line in lines
+                    if line.startswith(f"[DEBUG] function={function} action={action} ")
+                ]
+                case.assertTrue(matching, f"Missing {function} {action}:\n{output}")
 
 
 @contextmanager

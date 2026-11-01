@@ -17,29 +17,33 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TextIO
+from typing import TYPE_CHECKING, Final, Literal, TextIO
 
 if TYPE_CHECKING:
     from warehouse.workflow.warehouse_application import Command
 
 logger = logging.getLogger("warehouse")
 
+DIAGNOSTIC_FIELDS: Final[tuple[str, ...]] = (
+    "run_directory", "request_id", "request_sequence", "order_ids",
+    "truck_id", "worker_type", "worker", "source", "line_number",
+    "path", "row_count", "sku_evidence", "status_before", "status_after",
+    "location", "stock_before", "stock_after",
+)
+
+
+def _context_fields(context: Mapping[str, object]) -> dict[str, object]:
+    """Fill unavailable diagnostic fields without mutating the caller's evidence."""
+    fields: dict[str, object] = dict.fromkeys(DIAGNOSTIC_FIELDS, "n/a")
+    fields.update({name: value if value is not None else "n/a" for name, value in context.items()})
+    return fields
+
 
 def _format_context(context: Mapping[str, object]) -> str:
     """Expand diagnostic evidence without abbreviating collections of IDs."""
-    fields: dict[str, object] = dict.fromkeys(
-        (
-            "run_directory", "request_id", "request_sequence", "order_ids",
-            "truck_id", "worker_type", "worker", "source", "line_number",
-            "path", "row_count", "sku_evidence", "status_before", "status_after",
-            "location", "stock_before", "stock_after",
-        ),
-        "n/a",
-    )
-    fields.update(context)
     return " ".join(
         f"{name}={value if value is not None else 'n/a'}"
-        for name, value in fields.items()
+        for name, value in context.items()
     )
 
 
@@ -55,8 +59,8 @@ class ActivityLog:
     def __init__(self, run_directory: Path, console: TextIO) -> None:
         """Retain the run destination and checked stream used for command mirrors."""
         logger.debug(
-            "function=warehouse.file_io.activity_log.ActivityLog.__init__ action=entry %s",
-            _format_context({"run_directory": run_directory}),
+            "function=warehouse.file_io.activity_log.ActivityLog.__init__ action=entry",
+            extra={"run_directory": run_directory},
         )
         self.run_directory = run_directory
         self.console = console
@@ -93,15 +97,28 @@ class ActivityLog:
             raise ValueError("feedback level must be DEBUG, WARNING or ERROR; INFO is reserved")
         severity = getattr(logging, level)
         if logger.isEnabledFor(severity):
+            fields = _context_fields({"run_directory": self.run_directory, **context})
             logger.log(
                 severity, "function=%s %s %s", function, message,
-                _format_context({"run_directory": self.run_directory, **context}),
+                _format_context({
+                    name: value for name, value in fields.items()
+                    if name not in DIAGNOSTIC_FIELDS
+                }),
+                extra={name: fields[name] for name in DIAGNOSTIC_FIELDS},
             )
 
     def mark_incomplete(self, reason: str, context: Mapping[str, object]) -> None:
         """Report INCOMPLETE at ERROR with the last confirmed trace context."""
         self.feedback(
+            "DEBUG", "warehouse.file_io.activity_log.ActivityLog.mark_incomplete",
+            f"action=entry reason={reason!r}", context,
+        )
+        self.feedback(
             "ERROR", "warehouse.file_io.activity_log.ActivityLog.mark_incomplete",
             f"action=aborted result=INCOMPLETE reason={reason!r}",
             {"last_confirmed_trace_line": "n/a", **context},
+        )
+        self.feedback(
+            "DEBUG", "warehouse.file_io.activity_log.ActivityLog.mark_incomplete",
+            f"action=returned result=INCOMPLETE reason={reason!r}", context,
         )

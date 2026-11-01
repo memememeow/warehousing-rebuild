@@ -10,8 +10,11 @@ adding logging settings to the immutable address or emitting INFO here.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
+
+logger = logging.getLogger("warehouse")
 
 # TODO: Enforce coordinate and canonical-zone constraints at input validation.
 
@@ -24,6 +27,17 @@ class Location:
     aisle: int
     rack: int
     level: int
+
+    def __post_init__(self) -> None:
+        """Trace generated construction after all immutable fields are assigned."""
+        for action in ("entry", "returned"):
+            logger.debug(
+                "function=warehouse.domain.location.Location.__post_init__ action=%s "
+                "constructor=warehouse.domain.location.Location.__init__ "
+                "zone=%s aisle=%s rack=%s level=%s",
+                action, self.zone, self.aisle, self.rack, self.level,
+                extra={"location": (self.zone, self.aisle, self.rack, self.level)},
+            )
 
 
 type LocationMap = Mapping[str, Location]

@@ -23,7 +23,7 @@ from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from UnitTests import isolated_console_logging
+from UnitTests import assert_callable_traces, isolated_console_logging
 from warehouse.launcher import _parse_arguments, warehouse
 
 
@@ -166,15 +166,11 @@ class LauncherTests(unittest.TestCase):
                         if expected == 1:
                             if "T" in argv:
                                 lines = result.stdout.splitlines()
-                                self.assertEqual(len(lines), 4, result.stdout)
                                 self.assertTrue(all(line.startswith("[DEBUG] ") for line in lines))
-                                for function in ("warehouse", "_parse_arguments"):
-                                    for action in ("entry", "returned"):
-                                        self.assertIn(
-                                            f"function=warehouse.launcher.{function} "
-                                            f"action={action}",
-                                            result.stdout,
-                                        )
+                                assert_callable_traces(self, result.stdout, (
+                                    "warehouse.launcher.warehouse",
+                                    "warehouse.launcher._parse_arguments",
+                                ))
                             else:
                                 self.assertEqual(result.stdout, "")
                             self.assertEqual(len(result.stderr.splitlines()), 1)
