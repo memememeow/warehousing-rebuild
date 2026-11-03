@@ -1,8 +1,8 @@
 """Reserve standard-library tests for the Phase 1 warehouse contracts.
 
 Owner tests will use deterministic fixtures and isolated filesystem boundaries.
-Executable CLI, console and shared-enum tests cover steps 01–03; other owner
-modules remain placeholders and must not count as implementation completion.
+Executable CLI, console, shared-enum and product-catalog tests cover steps 01–04;
+later owner behavior remains unverified until its implementation and tests pass.
 
 Console tests cover thresholds, routing and transport failures. Exact INFO/trace
 equivalence remains deferred to step 21 with ActivityLog.record_command.

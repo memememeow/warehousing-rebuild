@@ -54,6 +54,7 @@ class SharedEnumIntegrationTests(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         modules = (
             "warehouse.domain.worker_type", "warehouse.domain.request_status",
+            "warehouse.domain.product_catalog",
             "warehouse.configuration.config_loader", "warehouse.configuration.warehouse_config",
             "warehouse.domain.fulfillment_request", "warehouse.domain.warehouse_state",
             "warehouse.workflow.warehouse_application", "warehouse.workflow.picking_workflow",
@@ -78,9 +79,11 @@ with patch('pathlib.Path.cwd') as cwd, patch('os.chdir') as chdir, patch('os.mkd
 from warehouse.domain.worker_type import WorkerType
 from warehouse.domain.request_status import RequestStatus
 from warehouse.configuration import warehouse_config
+from warehouse.domain import product_catalog
 from warehouse.domain import fulfillment_request
 from warehouse.workflow import warehouse_application
 assert warehouse_config.WorkerType is WorkerType
+assert warehouse_config.ProductCatalog is product_catalog.ProductCatalog
 assert warehouse_application.WorkerType is WorkerType
 assert fulfillment_request.RequestStatus is RequestStatus
 after = (logger.handlers[:], logger.level, logger.propagate, logger.disabled,

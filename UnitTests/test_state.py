@@ -1,4 +1,4 @@
-"""Verify shared enums and Step 02 diagnostics; reserve composed-state coverage.
+"""Verify enums, catalog immutability and diagnostics; reserve composed state.
 
 Future tests will verify the five state owners, shared request identity,
 collection isolation and informational replenisher readiness. Fixtures must
@@ -13,15 +13,18 @@ import json
 import logging
 import re
 import unittest
+from collections import UserDict
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import FrozenInstanceError
 from enum import StrEnum
 from pathlib import Path
+from unittest.mock import patch
 
 from UnitTests import assert_callable_traces, isolated_console_logging
 from warehouse.configuration.warehouse_config import WarehouseConfig
 from warehouse.domain.location import Location
 from warehouse.domain.order import Order
+from warehouse.domain.product_catalog import ProductCatalog
 from warehouse.domain.request_status import RequestStatus
 from warehouse.domain.worker_type import WorkerType
 from warehouse.file_io.activity_log import ActivityLog
@@ -104,6 +107,76 @@ class SharedEnumTests(unittest.TestCase):
                 self.assertEqual(imports, ["__future__", "enum"])
 
 
+class ProductCatalogImmutabilityTests(unittest.TestCase):
+    """Check each mutation route independently of future state owners."""
+
+    def setUp(self) -> None:
+        self.logger = self.enterContext(isolated_console_logging())
+
+    def test_catalog_copies_an_arbitrary_mapping_before_freezing(self) -> None:
+        source = UserDict({(" Model ", " Blue "): ("001", "002")})
+        catalog = ProductCatalog(source)
+        canonical = catalog.resolve_skus("model", "blue")
+        source[(" Model ", " Blue ")] = ("3", "4")
+        source[("New", "Red")] = ("5", "6")
+        del source[(" Model ", " Blue ")]
+        source.clear()
+        self.assertEqual(dict(catalog.products), {("model", "blue"): ("001", "002")})
+        self.assertIs(catalog.resolve_skus("model", "blue"), canonical)
+        with self.assertRaises(ValueError):
+            catalog.resolve_skus("New", "Red")
+
+    def test_mapping_assignment_and_deletion_preserve_contents(self) -> None:
+        catalog = ProductCatalog({("Model", "Blue"): ("1", "2")})
+        mapping = catalog.products
+        canonical = mapping[("model", "blue")]
+        before = dict(mapping)
+        with self.assertRaises(TypeError):
+            mapping[("model", "blue")] = ("3", "4")
+        with self.assertRaises(TypeError):
+            del mapping[("model", "blue")]
+        self.assertEqual(dict(mapping), before)
+        self.assertIs(catalog.products, mapping)
+        self.assertIs(catalog.resolve_skus("model", "blue"), canonical)
+
+    def test_catalog_retains_frozen_slots_and_blocks_field_changes(self) -> None:
+        catalog = ProductCatalog({("Model", "Blue"): ("1", "2")})
+        mapping = catalog.products
+        self.assertTrue(ProductCatalog.__dataclass_params__.frozen)
+        self.assertEqual(ProductCatalog.__slots__, ("products",))
+        self.assertFalse(hasattr(catalog, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            catalog.products = {}
+        with self.assertRaises(FrozenInstanceError):
+            del catalog.products
+        self.assertIs(catalog.products, mapping)
+        self.assertEqual(catalog.resolve_skus("model", "blue"), ("1", "2"))
+
+    def test_catalog_has_no_external_effects_or_runtime_owner_dependencies(self) -> None:
+        before = (self.logger.handlers[:], self.logger.level, self.logger.propagate)
+        with (
+            patch("builtins.open") as open_file,
+            patch("io.open") as path_open,
+            patch("os.mkdir") as mkdir,
+            patch("os.chdir") as chdir,
+            patch("pathlib.Path.cwd") as cwd,
+            patch("warehouse.launcher._configure_console_logging") as configure,
+        ):
+            catalog = ProductCatalog({("Model", "Blue"): ("1", "2")})
+            self.assertEqual(catalog.resolve_skus("model", "blue"), ("1", "2"))
+            with self.assertRaises(ValueError):
+                catalog.resolve_skus("missing", "blue")
+        for boundary in (open_file, path_open, mkdir, chdir, cwd, configure):
+            boundary.assert_not_called()
+        self.assertEqual(
+            (self.logger.handlers[:], self.logger.level, self.logger.propagate), before
+        )
+        path = Path(__file__).resolve().parent.parent / "warehouse/domain/product_catalog.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imports = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+        self.assertFalse(any(name.startswith("warehouse") for name in imports))
+
+
 class ConstructorDiagnosticTests(unittest.TestCase):
     """Exercise generated construction without implementing later owner behavior."""
 
@@ -120,8 +193,8 @@ class ConstructorDiagnosticTests(unittest.TestCase):
                 order = Order("O0001", "Model", "Blue", "1", "2")
                 locations = {"1": location, "2": location}
                 planner = RoutePlanner(locations)
-                # The catalog owner is still a stub; never invoke or inspect it here.
-                catalog = object()
+                catalog = ProductCatalog({("Model", "Blue"): ("1", "2")})
+                self.assertEqual(catalog.resolve_skus(" MODEL ", "blue"), ("1", "2"))
                 config = WarehouseConfig(
                     Path("Translation.CSV"), Path("Traversal.CSV"), Path("Stock.CSV"),
                     catalog, locations, {location: 6}, {}, 30, 5, 4, 4, 5,
@@ -135,6 +208,7 @@ class ConstructorDiagnosticTests(unittest.TestCase):
                 for value, field in (
                     (location, "zone"), (order, "id"), (planner, "location_map"),
                     (config, "default_stock"),
+                    (catalog, "products"),
                 ):
                     with self.assertRaises(FrozenInstanceError):
                         setattr(value, field, "changed")
@@ -147,6 +221,8 @@ class ConstructorDiagnosticTests(unittest.TestCase):
                     "warehouse.domain.order.Order.__post_init__",
                     "warehouse.routing.route_planner.RoutePlanner.__post_init__",
                     "warehouse.configuration.warehouse_config.WarehouseConfig.__post_init__",
+                    "warehouse.domain.product_catalog.ProductCatalog.__init__",
+                    "warehouse.domain.product_catalog.ProductCatalog.resolve_skus",
                 ))
                 for evidence in (
                     "order_ids=('O0001',)", "sku_evidence=('1', '2')", "row_count=2",
@@ -161,9 +237,11 @@ class ConstructorDiagnosticTests(unittest.TestCase):
             location = Location("A", 0, 0, 0)
             Order("O0001", "Model", "Blue", "1", "2")
             RoutePlanner({"1": location})
+            catalog = ProductCatalog({("Model", "Blue"): ("1", "2")})
+            catalog.resolve_skus("model", "blue")
             WarehouseConfig(
                 Path("Translation.CSV"), Path("Traversal.CSV"), Path("Stock.CSV"),
-                object(), {"1": location}, {}, {}, 30, 5, 4, 4, 5,
+                catalog, {"1": location}, {}, {}, 30, 5, 4, 4, 5,
                 4, 3, 3, 1, 1, 1, "%Y%m%d%H%M",
             )
             log = ActivityLog(Path("unused-run"), stdout)

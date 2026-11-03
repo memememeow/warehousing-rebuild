@@ -1,4 +1,4 @@
-"""Verify CLI and canonical role contracts; reserve input validation coverage.
+"""Verify CLI, product lookup and canonical roles; reserve input-file validation.
 
 Future cases cover launch-relative and config-relative references, absolute
 inputs, missing files, malformed JSON and CSVs, mixed case, normalization
@@ -12,6 +12,7 @@ run-folder creation. Debug verbosity adds no WarehouseConfig field.
 
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import os
@@ -28,11 +29,132 @@ from unittest.mock import patch
 
 from UnitTests import assert_callable_traces, isolated_console_logging
 from warehouse.configuration.warehouse_config import WarehouseConfig
+from warehouse.domain.product_catalog import ProductCatalog
 from warehouse.domain.worker_type import WorkerType
 from warehouse.launcher import _parse_arguments, warehouse
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+class ProductCatalogTests(unittest.TestCase):
+    """Exercise the real lookup without implementing configuration or acceptance."""
+
+    def setUp(self) -> None:
+        self.enterContext(isolated_console_logging())
+
+    def test_public_signatures_match_the_catalog_contract(self) -> None:
+        for method, parameters, annotations in (
+            (ProductCatalog.__init__, ("self", "products"), {
+                "products": Mapping[tuple[str, str], tuple[str, str]],
+                "return": type(None),
+            }),
+            (ProductCatalog.resolve_skus, ("self", "model", "colour"), {
+                "model": str, "colour": str, "return": tuple[str, str],
+            }),
+        ):
+            with self.subTest(method=method.__name__):
+                signature = inspect.signature(method)
+                self.assertEqual(tuple(signature.parameters), parameters)
+                self.assertTrue(all(
+                    value.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+                    and value.default is inspect.Parameter.empty
+                    for value in signature.parameters.values()
+                ))
+                self.assertEqual(get_type_hints(method), annotations)
+
+    def test_construction_and_lookup_share_strip_casefold_normalization(self) -> None:
+        for model in ("Straße", " STRASSE ", "\tstrasse\n"):
+            for colour in ("Weiß", " WEISS ", "\tweiss\n"):
+                with self.subTest(model=model, colour=colour):
+                    catalog = ProductCatalog({(model, colour): ("001", "020")})
+                    self.assertEqual(dict(catalog.products), {("strasse", "weiss"): ("001", "020")})
+                    for lookup in ((model, colour), (" STRAẞE ", " wEiSs "), ("strasse", "weiss")):
+                        self.assertEqual(catalog.resolve_skus(*lookup), ("001", "020"))
+
+    def test_distinct_source_keys_cannot_overwrite_a_normalized_pair(self) -> None:
+        for first, second in (
+            (("Model", "Blue"), ("model", "blue")),
+            (("Model", "Blue"), (" Model ", " Blue\t")),
+            (("Straße", "Weiß"), ("STRASSE", "WEISS")),
+        ):
+            for second_skus in (("1", "2"), ("3", "4")):
+                products = {first: ("1", "2"), second: second_skus}
+                before = products.copy()
+                with self.subTest(first=first, second=second, skus=second_skus):
+                    with self.assertRaisesRegex(ValueError, "collision"):
+                        ProductCatalog(products)
+                    self.assertEqual(products, before)
+
+    def test_front_back_strings_and_canonical_tuple_are_preserved(self) -> None:
+        for pair in (("0009", "001"), ("1", "1"), ("01", "1"),
+                     ("9" * 5000, "2"), ("٠١", "２")):
+            with self.subTest(pair=pair):
+                catalog = ProductCatalog({("Model", "Blue"): pair})
+                canonical = catalog.products[("model", "blue")]
+                resolved = catalog.resolve_skus(" MODEL ", "bLuE")
+                self.assertIs(type(resolved), tuple)
+                self.assertEqual(len(resolved), 2)
+                self.assertIs(resolved, canonical)
+                self.assertEqual(resolved, pair)
+                self.assertTrue(all(isinstance(sku, str) for sku in resolved))
+                self.assertIs(catalog.resolve_skus("model", "blue"), canonical)
+
+    def test_each_sku_must_be_a_positive_decimal_string(self) -> None:
+        invalid = ("", "0", "000", "٠０", "-1", "+1", "1.0", "1e2", " 1", "1 ",
+                   "1_0", "0x1", "²", "Ⅳ", 1, 1.5, True, False, None)
+        for sku in invalid:
+            for pair in ((sku, "2"), ("1", sku)):
+                products = {("Model", "Blue"): pair}
+                before = products.copy()
+                with self.subTest(pair=pair):
+                    with self.assertRaisesRegex(ValueError, "positive decimal string"):
+                        ProductCatalog(products)
+                    self.assertEqual(products, before)
+
+    def test_sku_data_requires_one_front_and_one_back_in_a_tuple(self) -> None:
+        for pair in ((), ("1",), ("1", "2", "3"), "12", ["1", "2"], None):
+            with self.subTest(pair=pair), self.assertRaises(ValueError):
+                ProductCatalog({("Model", "Blue"): pair})
+
+    def test_product_keys_require_a_model_colour_string_pair(self) -> None:
+        for key in ((), ("Model",), ("Model", "Blue", "extra"), "AB", (1, "Blue"), ("Model", None)):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                ProductCatalog({key: ("1", "2")})
+
+    def test_unknown_pairs_raise_value_error_without_changing_the_catalog(self) -> None:
+        catalog = ProductCatalog({("Model", "Blue"): ("1", "2")})
+        mapping = catalog.products
+        canonical = catalog.resolve_skus("model", "blue")
+        before = dict(mapping)
+        for model, colour in (("missing", "Blue"), ("Model", "missing"), ("?", "?")):
+            with self.subTest(model=model, colour=colour):
+                with self.assertRaisesRegex(ValueError, "[Uu]nknown product") as caught:
+                    catalog.resolve_skus(model, colour)
+                self.assertIn(model, str(caught.exception))
+                self.assertIn(colour, str(caught.exception))
+                self.assertIs(catalog.products, mapping)
+                self.assertEqual(dict(mapping), before)
+                self.assertIs(catalog.resolve_skus("model", "blue"), canonical)
+
+    def test_empty_catalog_rejects_lookup(self) -> None:
+        catalog = ProductCatalog({})
+        self.assertEqual(dict(catalog.products), {})
+        with self.assertRaises(ValueError):
+            catalog.resolve_skus("Model", "Blue")
+
+    def test_normalization_adds_no_other_product_restrictions(self) -> None:
+        products = {
+            ("", ""): ("1", "2"),
+            ("Model  X", "Blue"): ("3", "4"),
+            ("Café", "Blue"): ("5", "6"),
+            ("Cafe\u0301", "Blue"): ("7", "8"),
+        }
+        catalog = ProductCatalog(products)
+        for pair, skus in products.items():
+            self.assertEqual(catalog.resolve_skus(*pair), skus)
+        with self.assertRaises(ValueError):
+            catalog.resolve_skus("Model X", "Blue")
 
 
 class CanonicalRoleTests(unittest.TestCase):

@@ -23,6 +23,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from UnitTests import assert_callable_traces, isolated_console_logging
+from warehouse.domain.product_catalog import ProductCatalog
 from warehouse.domain.request_status import RequestStatus
 from warehouse.domain.worker_type import WorkerType
 from warehouse.file_io.activity_log import ActivityLog
@@ -230,6 +231,123 @@ class ConsoleLoggingTests(unittest.TestCase):
                         self.assertIn(f"{field}={member.value} ", line)
                         self.assertNotIn("WorkerType.", line)
                         self.assertNotIn("RequestStatus.", line)
+
+    def test_catalog_traces_context_once_in_all_cli_modes(self) -> None:
+        for options in ([], ["--debug", "F"], ["--debug", "T"]):
+            with self.subTest(options=options):
+                warehouse(["--config", "Config.JSON", "--orders", "Orders.TXT", *options])
+                handlers = self.logger.handlers[:]
+                self.stdout.seek(0)
+                self.stdout.truncate()
+                self.stderr.seek(0)
+                self.stderr.truncate()
+                catalog = ProductCatalog({(" Straße ", " Weiß "): ("001", "020")})
+                resolved = catalog.resolve_skus(" STRASSE ", " WEISS ")
+                with self.assertRaises(ValueError):
+                    catalog.resolve_skus("Unknown", "Blue")
+                self.assertEqual(resolved, ("001", "020"))
+                self.assertEqual(self.logger.handlers, handlers)
+                self.assertEqual(self.stderr.getvalue(), "")
+                output = self.stdout.getvalue()
+                self.assertNotIn("[INFO]", output)
+                if "T" not in options:
+                    self.assertEqual(output, "")
+                    continue
+                prefix = "warehouse.domain.product_catalog.ProductCatalog."
+                assert_callable_traces(self, output, (prefix + "__init__", prefix + "resolve_skus"))
+                for function, action, count in (
+                    ("__init__", "entry", 1), ("__init__", "validated", 1),
+                    ("__init__", "returned", 1), ("resolve_skus", "entry", 2),
+                    ("resolve_skus", "returned", 1), ("resolve_skus", "rejected", 1),
+                ):
+                    matching = [line for line in output.splitlines() if line.startswith(
+                        f"[DEBUG] function={prefix}{function} action={action} "
+                    )]
+                    self.assertEqual(len(matching), count, output)
+                for evidence in (
+                    "supplied_product=(' Straße ', ' Weiß ')",
+                    "supplied_product=(' STRASSE ', ' WEISS ')",
+                    "normalized_product=('strasse', 'weiss')", "sku_evidence=('001', '020')",
+                    "reason=unknown_product", "normalized_product=('unknown', 'blue')",
+                ):
+                    self.assertIn(evidence, output)
+                for line in output.splitlines():
+                    self.assertTrue(line.startswith("[DEBUG] "))
+                    for field in ("request_id", "request_sequence", "order_ids", "truck_id",
+                                  "worker_type", "worker", "source", "path", "location", "stock_after"):
+                        self.assertIn(f"{field}=n/a", line)
+                rejected = output.splitlines()[-1]
+                self.assertIn("sku_evidence=n/a", rejected)
+
+    def test_catalog_constructor_rejections_trace_supplied_and_normalized_evidence(self) -> None:
+        _configure_console_logging(logging.DEBUG)
+        for products, reason, evidence in (
+            ({("Model", "Blue"): ("1", "0")}, "positive decimal string", "('1', '0')"),
+            ({("Model", "Blue"): ("1", "2"), (" MODEL ", " BLUE "): ("3", "4")},
+             "collision", "('3', '4')"),
+        ):
+            with self.subTest(products=products):
+                self.stdout.seek(0)
+                self.stdout.truncate()
+                with self.assertRaises(ValueError):
+                    ProductCatalog(products)
+                lines = self.stdout.getvalue().splitlines()
+                rejected = [line for line in lines if "action=rejected " in line]
+                self.assertEqual(len(rejected), 1)
+                self.assertIn("ProductCatalog.__init__", rejected[0])
+                self.assertIn("supplied_product=", rejected[0])
+                self.assertIn("normalized_product=('model', 'blue')", rejected[0])
+                self.assertIn(f"sku_evidence={evidence}", rejected[0])
+                self.assertIn(reason, rejected[0])
+                self.assertFalse(any("action=returned " in line for line in lines))
+        self.assertEqual(self.stderr.getvalue(), "")
+
+    def test_catalog_suppressed_debug_does_not_format_evidence(self) -> None:
+        class UnformattableString(str):
+            def __str__(self) -> str:
+                raise AssertionError("suppressed string evidence formatted")
+
+            def __repr__(self) -> str:
+                raise AssertionError("suppressed string evidence repr formatted")
+
+        failing_stream = Mock()
+        failing_stream.write.side_effect = OSError("stdout unavailable")
+        with patch("sys.stdout", failing_stream):
+            _configure_console_logging(logging.INFO)
+            catalog = ProductCatalog({(UnformattableString("Model"), "Blue"):
+                                      (UnformattableString("001"), "002")})
+            self.assertEqual(catalog.resolve_skus("model", "blue"), ("001", "002"))
+        failing_stream.write.assert_not_called()
+        failing_stream.flush.assert_not_called()
+
+    def test_catalog_diagnostic_transport_failures_propagate_without_source_mutation(self) -> None:
+        products = {("Model", "Blue"): ("1", "2")}
+        catalog = ProductCatalog(products)
+        mapping = catalog.products
+        before = dict(mapping)
+        for operation in ("write", "flush", "short_write", "closed"):
+            for constructing in (True, False):
+                with self.subTest(operation=operation, constructing=constructing):
+                    captured = io.StringIO()
+                    stream = Mock(wraps=captured)
+                    with patch("sys.stdout", stream), patch.object(logging, "raiseExceptions", False):
+                        _configure_console_logging(logging.DEBUG)
+                        if operation == "closed":
+                            captured.close()
+                        elif operation == "short_write":
+                            stream.write.return_value = 1
+                        else:
+                            getattr(stream, operation).side_effect = OSError(f"catalog {operation} failed")
+                        with self.assertRaises(ValueError if operation == "closed" else OSError):
+                            if constructing:
+                                ProductCatalog(products)
+                            else:
+                                catalog.resolve_skus("model", "blue")
+                    self.assertEqual(products, {("Model", "Blue"): ("1", "2")})
+                    self.assertIs(catalog.products, mapping)
+                    self.assertEqual(dict(mapping), before)
+        # Restore a live stream before the isolated logging context closes handlers.
+        _configure_console_logging(logging.INFO)
 
     def test_mark_incomplete_reports_reason_and_available_trace_context(self) -> None:
         _configure_console_logging(logging.INFO)
