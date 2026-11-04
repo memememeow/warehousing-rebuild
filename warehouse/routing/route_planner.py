@@ -34,9 +34,8 @@ class RoutePlanner:
         if logger.isEnabledFor(logging.DEBUG):
             for action in ("entry", "returned"):
                 logger.debug(
-                    "function=warehouse.routing.route_planner.RoutePlanner.__post_init__ "
-                    "action=%s constructor=warehouse.routing.route_planner."
-                    "RoutePlanner.__init__ location_map=%s",
+                    "function=route_planner.__post_init__ "
+                    "action=%s constructor=route_planner.__init__ location_map=%s",
                     action, _diagnostic_text(self.location_map),
                     extra={"row_count": len(self.location_map)},
                 )

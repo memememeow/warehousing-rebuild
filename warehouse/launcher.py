@@ -95,7 +95,7 @@ def _configure_console_logging(console_level: int) -> None:
     # Replay setup entry/results only after both destinations are configured.
     for action in ("entry", "returned"):
         logger.debug(
-            "function=warehouse.launcher._configure_console_logging action=%s "
+            "function=launcher._configure_console_logging action=%s "
             "console_level=%s handler_count=%s propagate=%s",
             action, logging.getLevelName(console_level), len(logger.handlers), logger.propagate,
         )
@@ -106,7 +106,7 @@ def _report_logging_failure(
 ) -> None:
     """Attempt direct stderr reporting even when the configured transport fails."""
     text = (
-        "[ERROR] function=warehouse.launcher.warehouse action=aborted result=INCOMPLETE "
+        "[ERROR] function=launcher.warehouse action=aborted result=INCOMPLETE "
         f"reason=console_logging_failed error={str(error)!r} "
         "last_confirmed_trace_line=n/a "
         f"{_format_context(_context_fields(context))}\n"
@@ -178,15 +178,15 @@ def warehouse(argv: Sequence[str]) -> int:
         # Help and argument errors must never configure logging or emit diagnostics.
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "function=warehouse.launcher.warehouse action=entry %s",
+                "function=launcher.warehouse action=entry %s",
                 _format_context(context),
             )
             logger.debug(
-                "function=warehouse.launcher._parse_arguments action=entry %s",
+                "function=launcher._parse_arguments action=entry %s",
                 _format_context(context),
             )
             logger.debug(
-                "function=warehouse.launcher._parse_arguments action=returned %s",
+                "function=launcher._parse_arguments action=returned %s",
                 _format_context(context),
             )
         config = ConfigLoader(working_directory).load_config(config_path)
@@ -196,7 +196,7 @@ def warehouse(argv: Sequence[str]) -> int:
             return 1
         try:
             logger.error(
-                "function=warehouse.launcher.warehouse action=aborted result=INCOMPLETE "
+                "function=launcher.warehouse action=aborted result=INCOMPLETE "
                 "reason=configuration_failed error=%r; config supplied=%r resolved=%r; "
                 "orders supplied=%r resolved=%r; last_confirmed_trace_line=n/a %s",
                 str(error), arguments.config, str(context["config_resolved"]),
@@ -207,10 +207,9 @@ def warehouse(argv: Sequence[str]) -> int:
         return 1
     try:
         logger.error(
-            "function=warehouse.launcher.warehouse action=aborted "
+            "function=launcher.warehouse action=aborted "
             "configuration validated; simulation startup is not implemented; "
-            "numeric initialization (06), order validation (07), run folder (08) and "
-            "later simulation owners remain deferred; "
+            "deferred_steps=06-23; "
             "config supplied=%r, resolved=%r; orders supplied=%r, resolved=%r "
             "result=INCOMPLETE last_confirmed_trace_line=n/a %s",
             arguments.config, str(config_path), arguments.orders, str(orders_path),
@@ -218,7 +217,7 @@ def warehouse(argv: Sequence[str]) -> int:
         )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "function=warehouse.launcher.warehouse action=returned exit_code=1 "
+                "function=launcher.warehouse action=returned exit_code=1 "
                 "validated_locations=%s %s", len(config.location_map), _format_context(context),
             )
     except (OSError, ValueError) as error:

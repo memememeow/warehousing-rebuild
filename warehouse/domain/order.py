@@ -33,8 +33,8 @@ class Order:
         """Trace generated construction without changing accepted order identity."""
         for action in ("entry", "returned"):
             logger.debug(
-                "function=warehouse.domain.order.Order.__post_init__ action=%s "
-                "constructor=warehouse.domain.order.Order.__init__ model=%s colour=%s",
+                "function=order.__post_init__ action=%s "
+                "constructor=order.__init__ model=%s colour=%s",
                 action, self.model, self.colour,
                 extra={"order_ids": (self.id,), "sku_evidence": (self.front_sku, self.back_sku)},
             )

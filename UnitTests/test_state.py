@@ -223,12 +223,12 @@ class ConstructorDiagnosticTests(unittest.TestCase):
                     self.assertEqual(stdout.getvalue(), "")
                     continue
                 assert_callable_traces(self, stdout.getvalue(), (
-                    "warehouse.domain.location.Location.__post_init__",
-                    "warehouse.domain.order.Order.__post_init__",
-                    "warehouse.routing.route_planner.RoutePlanner.__post_init__",
-                    "warehouse.configuration.warehouse_config.WarehouseConfig.__post_init__",
-                    "warehouse.domain.product_catalog.ProductCatalog.__init__",
-                    "warehouse.domain.product_catalog.ProductCatalog.resolve_skus",
+                    "location.__post_init__",
+                    "order.__post_init__",
+                    "route_planner.__post_init__",
+                    "warehouse_config.__post_init__",
+                    "product_catalog.__init__",
+                    "product_catalog.resolve_skus",
                 ))
                 for evidence in (
                     "order_ids=('O0001',)", "sku_evidence=('1', '2')", "row_count=2",
@@ -272,7 +272,7 @@ class ConstructorDiagnosticTests(unittest.TestCase):
             "warehouse.file_io.activity_log._diagnostic_text",
             "warehouse.file_io.activity_log.ActivityLog.feedback",
         }
-        implemented: set[str] = set()
+        implemented: dict[str, str] = {}
         root = Path(__file__).resolve().parent.parent
         for path in (root / "warehouse").rglob("*.py"):
             module = ".".join(path.relative_to(root).with_suffix("").parts)
@@ -293,9 +293,12 @@ class ConstructorDiagnosticTests(unittest.TestCase):
                     ):
                         continue
                     prefix = f"{owner.name}." if isinstance(owner, ast.ClassDef) else ""
-                    implemented.add(f"{module}.{prefix}{node.name}")
-        self.assertEqual(implemented, traced | transport)
-        self.assertTrue(traced.isdisjoint(transport))
+                    implemented[f"{module}.{prefix}{node.name}"] = f"{path.stem}.{node.name}"
+        # Keep full identities in the inventory and require unambiguous short labels.
+        self.assertEqual(len(implemented), len(set(implemented.values())))
+        transport_labels = {implemented[function] for function in transport}
+        self.assertEqual(set(implemented.values()), traced | transport_labels)
+        self.assertTrue(traced.isdisjoint(transport_labels))
 
     def test_logging_ownership_and_debug_option_stay_at_the_launcher_boundary(self) -> None:
         root = Path(__file__).resolve().parent.parent

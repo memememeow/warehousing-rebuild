@@ -145,6 +145,25 @@ class ProductCatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             catalog.resolve_skus("Model", "Blue")
 
+    def test_validation_order_and_error_messages_are_preserved(self) -> None:
+        for products, message in (
+            ({"AB": None}, "Product key must be a model/colour string pair: 'AB'"),
+            ({("Model", "Blue"): None},
+             "Product ('Model', 'Blue') requires a front/back SKU tuple: None"),
+            ({("Model", "Blue"): ("0", "0")},
+             "Product ('Model', 'Blue') front SKU must be a positive decimal string: '0'"),
+            ({("Model", "Blue"): ("1", "0")},
+             "Product ('Model', 'Blue') back SKU must be a positive decimal string: '0'"),
+            ({("Model", "Blue"): ("1", "2"), (" MODEL ", " BLUE "): None},
+             "Product normalization collision: supplied=(' MODEL ', ' BLUE '), "
+             "normalized=('model', 'blue')"),
+        ):
+            before = products.copy()
+            with self.subTest(products=products), self.assertRaises(ValueError) as caught:
+                ProductCatalog(products)
+            self.assertEqual(str(caught.exception), message)
+            self.assertEqual(products, before)
+
     def test_normalization_adds_no_other_product_restrictions(self) -> None:
         products = {
             ("", ""): ("1", "2"),
@@ -331,8 +350,8 @@ class LauncherTests(unittest.TestCase):
                                 lines = result.stdout.splitlines()
                                 self.assertTrue(all(line.startswith("[DEBUG] ") for line in lines))
                                 assert_callable_traces(self, result.stdout, (
-                                    "warehouse.launcher.warehouse",
-                                    "warehouse.launcher._parse_arguments",
+                                    "launcher.warehouse",
+                                    "launcher._parse_arguments",
                                 ))
                             else:
                                 self.assertEqual(result.stdout, "")

@@ -90,7 +90,7 @@ class ConfigurationLimitTests(unittest.TestCase):
                     if "T" in options:
                         for evidence in ("value=" + token, "'default_stock': " + token,
                                          "'nested': [" + token, "aisle=" + token,
-                                         "stock=", "WarehouseConfig.__post_init__ action=returned"):
+                                         "stock=", "warehouse_config.__post_init__ action=returned"):
                             self.assertIn(evidence, out.getvalue())
                     else:
                         self.assertEqual(out.getvalue(), "")
@@ -152,7 +152,7 @@ class ConfigurationLimitTests(unittest.TestCase):
             self.assertIn("value={'nested': [" + token + "]}", err.getvalue())
             self.assertIn("-" + token, str(caught.exception))
             if "T" in options:
-                self.assertIn("RoutePlanner.__post_init__ action=returned", out.getvalue())
+                self.assertIn("route_planner.__post_init__ action=returned", out.getvalue())
                 self.assertIn("aisle=" + token, out.getvalue())
         stock_path = self.path.parent / "Stock.CSV"
         stock_path.write_text("zone,aisle,rack,level,stock\nNorth," + token + ",0,0,1\n", encoding="utf-8")
@@ -166,8 +166,8 @@ class ConfigurationLimitTests(unittest.TestCase):
         for phase, field in (("_decimal_integer action=returned", ""),
                              ("_decimal_integer action=returned", "field=stock"),
                              ("_json_object action=entry", ""),
-                             ("Location.__post_init__ action=returned", ""),
-                             ("WarehouseConfig.__post_init__ action=returned", "")):
+                             ("location.__post_init__ action=returned", ""),
+                             ("warehouse_config.__post_init__ action=returned", "")):
             for failure in (ValueError("large diagnostic failed"), OSError("large diagnostic failed"),
                             json.JSONDecodeError("syntax-shaped diagnostic failure", "{}", 0)):
                 with self.subTest(phase=phase, field=field, error_type=type(failure)):

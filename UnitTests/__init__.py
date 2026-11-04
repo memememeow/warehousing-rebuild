@@ -20,7 +20,7 @@ from contextlib import contextmanager
 def assert_callable_traces(
     case: unittest.TestCase, output: str, callables: tuple[str, ...]
 ) -> None:
-    """Require qualified entry/results without fixing the number of DEBUG records."""
+    """Require file/function entry/results without fixing the DEBUG record count."""
     lines = output.splitlines()
     for function in callables:
         for action in ("entry", "returned"):

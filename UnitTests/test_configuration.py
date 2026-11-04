@@ -648,26 +648,26 @@ class ConfigurationDiagnosticTests(unittest.TestCase):
                     continue
                 output = out.getvalue()
                 assert_callable_traces(self, output, (
-                    "warehouse.configuration.config_loader.ConfigLoader.load_config",
-                    "warehouse.configuration.config_loader.ConfigLoader.__init__",
-                    *("warehouse.configuration.config_loader." + name for name in (
+                    "config_loader.load_config",
+                    "config_loader.__init__",
+                    *("config_loader." + name for name in (
                         "_read_json", "_json_object", "_json_number", "_decimal_integer", "_required", "_section",
                         "_resolve_reference", "_read_csv", "_sku", "_read_products", "_csv_integer",
                         "_location", "_read_locations", "_read_stock", "_employees", "_settings")),
-                    "warehouse.domain.product_catalog.ProductCatalog.__init__",
-                    "warehouse.domain.product_catalog.ProductCatalog.resolve_skus",
-                    "warehouse.domain.location.Location.__post_init__",
-                    "warehouse.configuration.warehouse_config.WarehouseConfig.__post_init__",
+                    "product_catalog.__init__",
+                    "product_catalog.resolve_skus",
+                    "location.__post_init__",
+                    "warehouse_config.__post_init__",
                 ))
                 for evidence in (str(self.path), "Products.CSV", "Traversal.CSV", "Stock.CSV",
                                  "line_number=2", "row_count=4", "supplied=", "resolved=", "value=43",
                                  "request_id=n/a", "order_ids=n/a", "truck_id=n/a"):
                     self.assertIn(evidence, output)
-                for name in ("ConfigLoader.load_config", "_read_json", "_read_products", "_read_locations",
+                for name in ("load_config", "_read_json", "_read_products", "_read_locations",
                              "_read_stock", "_employees", "_settings"):
                     for action in ("entry", "returned"):
                         matching = [line for line in output.splitlines()
-                                    if line.startswith(f"[DEBUG] function=warehouse.configuration.config_loader.{name} action={action} ")]
+                                    if line.startswith(f"[DEBUG] function=config_loader.{name} action={action} ")]
                         self.assertEqual(len(matching), 1)
                 self.assertTrue(all(line.startswith("[DEBUG] ") for line in output.splitlines()))
 
@@ -717,7 +717,7 @@ class ConfigurationDiagnosticTests(unittest.TestCase):
             self.assertNotIn("configuration validated", stderr.getvalue())
 
     def test_actual_loader_stream_write_flush_short_and_closed_failures_propagate(self) -> None:
-        for phase in ("_read_csv", "_read_json", "WarehouseConfig.__post_init__"):
+        for phase in ("config_loader._read_csv", "config_loader._read_json", "warehouse_config.__post_init__"):
             for operation in ("write", "flush", "short", "closed"):
                 with self.subTest(phase=phase, operation=operation):
                     captured = io.StringIO()

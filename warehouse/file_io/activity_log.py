@@ -93,13 +93,13 @@ class ActivityLog:
     def __init__(self, run_directory: Path, console: TextIO) -> None:
         """Retain the run destination and checked stream used for command mirrors."""
         logger.debug(
-            "function=warehouse.file_io.activity_log.ActivityLog.__init__ action=entry",
+            "function=activity_log.__init__ action=entry",
             extra={"run_directory": run_directory},
         )
         self.run_directory = run_directory
         self.console = console
         self.feedback(
-            "DEBUG", "warehouse.file_io.activity_log.ActivityLog.__init__",
+            "DEBUG", "activity_log.__init__",
             "action=returned", {},
         )
 
@@ -123,7 +123,7 @@ class ActivityLog:
     ) -> None:
         """Emit DEBUG/WARNING/ERROR feedback and reject INFO before output.
 
-        Retain qualified function names and complete available context. Filter
+        Use file/function labels and retain complete available context. Filter
         DEBUG at the launcher's selected threshold; never recursively trace
         diagnostic transport or emit a command mirror from this method.
         """
@@ -144,15 +144,15 @@ class ActivityLog:
     def mark_incomplete(self, reason: str, context: Mapping[str, object]) -> None:
         """Report INCOMPLETE at ERROR with the last confirmed trace context."""
         self.feedback(
-            "DEBUG", "warehouse.file_io.activity_log.ActivityLog.mark_incomplete",
+            "DEBUG", "activity_log.mark_incomplete",
             f"action=entry reason={reason!r}", context,
         )
         self.feedback(
-            "ERROR", "warehouse.file_io.activity_log.ActivityLog.mark_incomplete",
+            "ERROR", "activity_log.mark_incomplete",
             f"action=aborted result=INCOMPLETE reason={reason!r}",
             {"last_confirmed_trace_line": "n/a", **context},
         )
         self.feedback(
-            "DEBUG", "warehouse.file_io.activity_log.ActivityLog.mark_incomplete",
+            "DEBUG", "activity_log.mark_incomplete",
             f"action=returned result=INCOMPLETE reason={reason!r}", context,
         )

@@ -64,9 +64,8 @@ class WarehouseConfig:
                 if field.name != "catalog"
             }
             logger.debug(
-                "function=warehouse.configuration.warehouse_config.WarehouseConfig."
-                "__post_init__ action=entry constructor=warehouse.configuration."
-                "warehouse_config.WarehouseConfig.__init__ settings=%s catalog_type=%s",
+                "function=warehouse_config.__post_init__ action=entry "
+                "constructor=warehouse_config.__init__ settings=%s catalog_type=%s",
                 _diagnostic_text(settings), type(self.catalog).__qualname__,
                 extra={"row_count": len(self.location_map)},
             )
@@ -78,9 +77,8 @@ class WarehouseConfig:
         object.__setattr__(self, "employees", employees)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "function=warehouse.configuration.warehouse_config.WarehouseConfig."
-                "__post_init__ action=returned constructor=warehouse.configuration."
-                "warehouse_config.WarehouseConfig.__init__ settings=%s catalog_type=%s",
+                "function=warehouse_config.__post_init__ action=returned "
+                "constructor=warehouse_config.__init__ settings=%s catalog_type=%s",
                 _diagnostic_text(settings), type(self.catalog).__qualname__,
                 extra={"row_count": len(self.location_map)},
             )

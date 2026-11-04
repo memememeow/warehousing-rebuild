@@ -32,8 +32,8 @@ class Location:
         """Validate coordinates; the reader owns canonical zones and membership."""
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "function=warehouse.domain.location.Location.__post_init__ action=entry "
-                "constructor=warehouse.domain.location.Location.__init__ "
+                "function=location.__post_init__ action=entry "
+                "constructor=location.__init__ "
                 "zone=%s aisle=%s rack=%s level=%s",
                 self.zone, _diagnostic_text(self.aisle), _diagnostic_text(self.rack),
                 _diagnostic_text(self.level),
@@ -47,8 +47,8 @@ class Location:
                 )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "function=warehouse.domain.location.Location.__post_init__ action=returned "
-                "constructor=warehouse.domain.location.Location.__init__ "
+                "function=location.__post_init__ action=returned "
+                "constructor=location.__init__ "
                 "zone=%s aisle=%s rack=%s level=%s",
                 self.zone, _diagnostic_text(self.aisle), _diagnostic_text(self.rack),
                 _diagnostic_text(self.level),

@@ -36,19 +36,19 @@ class ConfigLoader:
 
     def __init__(self, working_directory: Path | None = None) -> None:
         logger.debug(
-            "function=warehouse.configuration.config_loader.ConfigLoader.__init__ "
+            "function=config_loader.__init__ "
             "action=entry working_directory=%s", working_directory,
         )
         self._working_directory = working_directory if working_directory is not None else Path.cwd()
         logger.debug(
-            "function=warehouse.configuration.config_loader.ConfigLoader.__init__ "
+            "function=config_loader.__init__ "
             "action=returned output_parent=%s", self._working_directory,
         )
 
     def load_config(self, config_path: Path) -> WarehouseConfig:
         """Validate JSON and referenced CSVs; raise ValueError or OSError on failure."""
         logger.debug(
-            "function=warehouse.configuration.config_loader.ConfigLoader.load_config "
+            "function=config_loader.load_config "
             "action=entry supplied=%r", config_path,
             extra={"source": config_path, "path": config_path},
         )
@@ -78,7 +78,7 @@ class ConfigLoader:
                         f"has no location in {sources['location_map']}"
                     )
                 logger.debug(
-                    "function=warehouse.configuration.config_loader.ConfigLoader.load_config "
+                    "function=config_loader.load_config "
                     "action=validated product=%r SKU=%r coverage=known_location",
                     product, sku, extra={"source": sources["translation"],
                                          "path": paths["location_map"], "location": location_map[sku]},
@@ -92,7 +92,7 @@ class ConfigLoader:
         settings = _settings(warehouse, identifiers, source)
         if "output_root" in files:
             logger.warning(
-                "function=warehouse.configuration.config_loader.ConfigLoader.load_config "
+                "function=config_loader.load_config "
                 "action=ignored JSON field=files.output_root value=%s; output_parent=%s",
                 _diagnostic_text(files["output_root"], conversion="r"), self._working_directory,
                 extra={"source": source},
@@ -100,7 +100,7 @@ class ConfigLoader:
         if "request_timestamp_timezone" in identifiers:
             local_instant = datetime.now().astimezone()
             logger.warning(
-                "function=warehouse.configuration.config_loader.ConfigLoader.load_config "
+                "function=config_loader.load_config "
                 "action=ignored JSON field=identifiers.request_timestamp_timezone value=%s; "
                 "local_timezone=%s utc_offset=%s local_instant=%s",
                 _diagnostic_text(identifiers["request_timestamp_timezone"], conversion="r"),
@@ -115,7 +115,7 @@ class ConfigLoader:
         )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "function=warehouse.configuration.config_loader.ConfigLoader.load_config "
+                "function=config_loader.load_config "
                 "action=returned paths=%r settings=%s employees=%r",
                 paths, _diagnostic_text(settings, conversion="r"), employees,
                 extra={"source": source, "row_count": len(location_map)},
@@ -125,7 +125,7 @@ class ConfigLoader:
 
 def _read_json(path: Path, source: str) -> dict[str, object]:
     logger.debug(
-        "function=warehouse.configuration.config_loader._read_json action=entry",
+        "function=config_loader._read_json action=entry",
         extra={"source": source, "path": path},
     )
     try:
@@ -150,7 +150,7 @@ def _read_json(path: Path, source: str) -> dict[str, object]:
     if not isinstance(document, dict):
         raise ValueError(f"{source}; JSON root must be an object")
     logger.debug(
-        "function=warehouse.configuration.config_loader._read_json action=returned "
+        "function=config_loader._read_json action=returned "
         "keys=%r", tuple(document), extra={"source": source, "path": path},
     )
     return document
@@ -159,7 +159,7 @@ def _read_json(path: Path, source: str) -> dict[str, object]:
 def _json_object(source: str, pairs: list[tuple[str, object]]) -> dict[str, object]:
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "function=warehouse.configuration.config_loader._json_object action=entry pairs=%s",
+            "function=config_loader._json_object action=entry pairs=%s",
             _diagnostic_text(pairs, conversion="r"), extra={"source": source, "row_count": len(pairs)},
         )
     normalized: dict[str, object] = {}
@@ -169,7 +169,7 @@ def _json_object(source: str, pairs: list[tuple[str, object]]) -> dict[str, obje
             raise ValueError(f"{source}; duplicate JSON key supplied={key!r} normalized={name!r}")
         normalized[name] = value
     logger.debug(
-        "function=warehouse.configuration.config_loader._json_object action=returned keys=%r",
+        "function=config_loader._json_object action=returned keys=%r",
         tuple(normalized), extra={"source": source, "row_count": len(normalized)},
     )
     return normalized
@@ -178,7 +178,7 @@ def _json_object(source: str, pairs: list[tuple[str, object]]) -> dict[str, obje
 def _json_number(source: str, token: str) -> int:
     """Parse integers and reject the decoder's nonstandard numeric constants."""
     logger.debug(
-        "function=warehouse.configuration.config_loader._json_number action=entry token=%r",
+        "function=config_loader._json_number action=entry token=%r",
         token, extra={"source": source},
     )
     try:
@@ -189,7 +189,7 @@ def _json_number(source: str, token: str) -> int:
         raise ValueError(f"{source}; invalid JSON number token={token!r}: {error}") from error
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "function=warehouse.configuration.config_loader._json_number action=returned value=%s",
+            "function=config_loader._json_number action=returned value=%s",
             _diagnostic_text(value, conversion="r"), extra={"source": source},
         )
     return value
@@ -198,7 +198,7 @@ def _json_number(source: str, token: str) -> int:
 def _decimal_integer(token: str, source: str) -> int:
     """Preserve int's decimal spelling rules while converting bounded chunks."""
     logger.debug(
-        "function=warehouse.configuration.config_loader._decimal_integer action=entry token=%r",
+        "function=config_loader._decimal_integer action=entry token=%r",
         token, extra={"source": source},
     )
     stripped = token.strip()
@@ -216,7 +216,7 @@ def _decimal_integer(token: str, source: str) -> int:
         value = -value
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "function=warehouse.configuration.config_loader._decimal_integer "
+            "function=config_loader._decimal_integer "
             "action=returned value=%s", _diagnostic_text(value),
             extra={"source": source},
         )
@@ -225,7 +225,7 @@ def _decimal_integer(token: str, source: str) -> int:
 
 def _required(values: Mapping[str, object], field: str, source: str) -> object:
     logger.debug(
-        "function=warehouse.configuration.config_loader._required action=entry field=%s",
+        "function=config_loader._required action=entry field=%s",
         field, extra={"source": source},
     )
     if field not in values:
@@ -233,7 +233,7 @@ def _required(values: Mapping[str, object], field: str, source: str) -> object:
     value = values[field]
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "function=warehouse.configuration.config_loader._required action=returned field=%s value=%s",
+            "function=config_loader._required action=returned field=%s value=%s",
             field, _diagnostic_text(value, conversion="r"), extra={"source": source},
         )
     return value
@@ -241,7 +241,7 @@ def _required(values: Mapping[str, object], field: str, source: str) -> object:
 
 def _section(document: Mapping[str, object], name: str, source: str) -> dict[str, object]:
     logger.debug(
-        "function=warehouse.configuration.config_loader._section action=entry section=%s",
+        "function=config_loader._section action=entry section=%s",
         name, extra={"source": source},
     )
     section = _required(document, name, source)
@@ -251,7 +251,7 @@ def _section(document: Mapping[str, object], name: str, source: str) -> dict[str
             f"value={_diagnostic_text(section, conversion='r')}"
         )
     logger.debug(
-        "function=warehouse.configuration.config_loader._section action=returned section=%s keys=%r",
+        "function=config_loader._section action=returned section=%s keys=%r",
         name, tuple(section), extra={"source": source},
     )
     return section
@@ -260,7 +260,7 @@ def _section(document: Mapping[str, object], name: str, source: str) -> dict[str
 def _resolve_reference(config_path: Path, field: str, supplied: object, source: str) -> Path:
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "function=warehouse.configuration.config_loader._resolve_reference action=entry "
+            "function=config_loader._resolve_reference action=entry "
             "field=files.%s supplied=%s", field, _diagnostic_text(supplied, conversion="r"),
             extra={"source": source},
         )
@@ -273,7 +273,7 @@ def _resolve_reference(config_path: Path, field: str, supplied: object, source: 
         raise ValueError(f"{context}; path resolution failed: {error}") from error
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "function=warehouse.configuration.config_loader._resolve_reference action=returned "
+            "function=config_loader._resolve_reference action=returned "
             "field=files.%s supplied=%s resolved=%s", field, _diagnostic_text(supplied, conversion="r"), resolved,
             extra={"source": source, "path": resolved},
         )
@@ -282,7 +282,7 @@ def _resolve_reference(config_path: Path, field: str, supplied: object, source: 
 
 def _read_csv(path: Path, source: str, headers: tuple[str, ...]) -> tuple[tuple[int, dict[str, str]], ...]:
     logger.debug(
-        "function=warehouse.configuration.config_loader._read_csv action=entry headers=%r",
+        "function=config_loader._read_csv action=entry headers=%r",
         headers, extra={"source": source, "path": path},
     )
     reader = None
@@ -311,11 +311,11 @@ def _read_csv(path: Path, source: str, headers: tuple[str, ...]) -> tuple[tuple[
             )
         rows.append((line, dict(zip(normalized, row, strict=True))))
         logger.debug(
-            "function=warehouse.configuration.config_loader._read_csv action=validated row=%r",
+            "function=config_loader._read_csv action=validated row=%r",
             row, extra={"source": source, "path": path, "line_number": line},
         )
     logger.debug(
-        "function=warehouse.configuration.config_loader._read_csv action=returned headers=%r",
+        "function=config_loader._read_csv action=returned headers=%r",
         normalized, extra={"source": source, "path": path, "row_count": len(rows)},
     )
     return tuple(rows)
@@ -323,13 +323,13 @@ def _read_csv(path: Path, source: str, headers: tuple[str, ...]) -> tuple[tuple[
 
 def _sku(token: str, source: str) -> str:
     logger.debug(
-        "function=warehouse.configuration.config_loader._sku action=entry token=%r",
+        "function=config_loader._sku action=entry token=%r",
         token, extra={"source": source},
     )
     if not token.isdecimal() or not any(decimal(digit) for digit in token):
         raise ValueError(f"{source}; SKU must be a positive decimal string: {token!r}")
     logger.debug(
-        "function=warehouse.configuration.config_loader._sku action=returned token=%r",
+        "function=config_loader._sku action=returned token=%r",
         token, extra={"source": source, "sku_evidence": (token,)},
     )
     return token
@@ -337,7 +337,7 @@ def _sku(token: str, source: str) -> str:
 
 def _read_products(path: Path, source: str) -> ProductCatalog:
     logger.debug(
-        "function=warehouse.configuration.config_loader._read_products action=entry",
+        "function=config_loader._read_products action=entry",
         extra={"source": source, "path": path},
     )
     products: dict[tuple[str, str], tuple[str, str]] = {}
@@ -352,7 +352,7 @@ def _read_products(path: Path, source: str) -> ProductCatalog:
         )
     catalog = ProductCatalog(products)
     logger.debug(
-        "function=warehouse.configuration.config_loader._read_products action=returned products=%r",
+        "function=config_loader._read_products action=returned products=%r",
         catalog.products, extra={"source": source, "path": path, "row_count": len(products)},
     )
     return catalog
@@ -360,7 +360,7 @@ def _read_products(path: Path, source: str) -> ProductCatalog:
 
 def _csv_integer(token: str, source: str) -> int:
     logger.debug(
-        "function=warehouse.configuration.config_loader._csv_integer action=entry token=%r",
+        "function=config_loader._csv_integer action=entry token=%r",
         token, extra={"source": source},
     )
     try:
@@ -373,7 +373,7 @@ def _csv_integer(token: str, source: str) -> int:
         raise ValueError(f"{source}; expected nonnegative integer, supplied={token!r}")
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "function=warehouse.configuration.config_loader._csv_integer action=returned value=%s",
+            "function=config_loader._csv_integer action=returned value=%s",
             _diagnostic_text(value, conversion="r"), extra={"source": source},
         )
     return value
@@ -381,7 +381,7 @@ def _csv_integer(token: str, source: str) -> int:
 
 def _location(row: Mapping[str, str], zones: Mapping[str, str], source: str) -> Location:
     logger.debug(
-        "function=warehouse.configuration.config_loader._location action=entry row=%r zones=%r",
+        "function=config_loader._location action=entry row=%r zones=%r",
         row, zones, extra={"source": source},
     )
     zone_key = row["zone"].strip().casefold()
@@ -391,7 +391,7 @@ def _location(row: Mapping[str, str], zones: Mapping[str, str], source: str) -> 
         _csv_integer(row[field], f"{source} field={field}") for field in ("aisle", "rack", "level")
     ))
     logger.debug(
-        "function=warehouse.configuration.config_loader._location action=returned",
+        "function=config_loader._location action=returned",
         extra={"source": source, "location": location},
     )
     return location
@@ -399,7 +399,7 @@ def _location(row: Mapping[str, str], zones: Mapping[str, str], source: str) -> 
 
 def _read_locations(path: Path, source: str) -> tuple[dict[str, Location], dict[str, str]]:
     logger.debug(
-        "function=warehouse.configuration.config_loader._read_locations action=entry",
+        "function=config_loader._read_locations action=entry",
         extra={"source": source, "path": path},
     )
     locations: dict[str, Location] = {}
@@ -417,7 +417,7 @@ def _read_locations(path: Path, source: str) -> tuple[dict[str, Location], dict[
         locations[sku] = location
         addresses.add(location)
     logger.debug(
-        "function=warehouse.configuration.config_loader._read_locations action=returned zones=%r",
+        "function=config_loader._read_locations action=returned zones=%r",
         zones, extra={"source": source, "path": path, "row_count": len(locations)},
     )
     return locations, zones
@@ -427,7 +427,7 @@ def _read_stock(
     path: Path, source: str, location_map: Mapping[str, Location], zones: Mapping[str, str],
 ) -> dict[Location, int]:
     logger.debug(
-        "function=warehouse.configuration.config_loader._read_stock action=entry",
+        "function=config_loader._read_stock action=entry",
         extra={"source": source, "path": path},
     )
     canonical = {location: location for location in location_map.values()}
@@ -442,7 +442,7 @@ def _read_stock(
         stock[canonical[location]] = _csv_integer(row["stock"], f"{context} field=stock")
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "function=warehouse.configuration.config_loader._read_stock action=returned stock=%s",
+            "function=config_loader._read_stock action=returned stock=%s",
             _diagnostic_text(stock, conversion="r"), extra={"source": source, "path": path, "row_count": len(stock)},
         )
     return stock
@@ -451,7 +451,7 @@ def _read_stock(
 def _employees(values: Mapping[str, object], source: str) -> dict[WorkerType, tuple[str, ...]]:
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "function=warehouse.configuration.config_loader._employees action=entry values=%s",
+            "function=config_loader._employees action=entry values=%s",
             _diagnostic_text(values, conversion="r"), extra={"source": source},
         )
     aliases = {f"{role.value}s": role.value for role in WorkerType}
@@ -474,7 +474,7 @@ def _employees(values: Mapping[str, object], source: str) -> dict[WorkerType, tu
         employees[role] = tuple(names)
         if normalized in aliases:
             logger.warning(
-                "function=warehouse.configuration.config_loader._employees action=normalized "
+                "function=config_loader._employees action=normalized "
                 "legacy plural role=%r canonical=%s", supplied, role,
                 extra={"source": source, "worker_type": role},
             )
@@ -482,7 +482,7 @@ def _employees(values: Mapping[str, object], source: str) -> dict[WorkerType, tu
     if missing:
         raise ValueError(f"{source}; JSON field employees missing required roles={missing!r}")
     logger.debug(
-        "function=warehouse.configuration.config_loader._employees action=returned employees=%r",
+        "function=config_loader._employees action=returned employees=%r",
         employees, extra={"source": source},
     )
     return employees
@@ -493,7 +493,7 @@ def _settings(
 ) -> dict[str, int | str]:
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "function=warehouse.configuration.config_loader._settings action=entry "
+            "function=config_loader._settings action=entry "
             "warehouse=%s identifiers=%s",
             _diagnostic_text(warehouse, conversion="r"),
             _diagnostic_text(identifiers, conversion="r"), extra={"source": source},
@@ -532,7 +532,7 @@ def _settings(
     settings["request_timestamp_format"] = timestamp
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "function=warehouse.configuration.config_loader._settings action=returned settings=%s",
+            "function=config_loader._settings action=returned settings=%s",
             _diagnostic_text(settings, conversion="r"), extra={"source": source},
         )
     return settings
