@@ -1,4 +1,4 @@
-"""Declare immutable four-part warehouse addresses and SKU location mappings.
+"""Provide immutable four-part warehouse addresses and SKU location mappings.
 
 Readers provide canonical zone spelling and nonnegative coordinates. Location
 values are hashable inventory keys; the mapping alias preserves traversal order
@@ -14,9 +14,9 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-logger = logging.getLogger("warehouse")
+from warehouse.file_io.activity_log import _diagnostic_text
 
-# TODO: Enforce coordinate and canonical-zone constraints at input validation.
+logger = logging.getLogger("warehouse")
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,13 +29,29 @@ class Location:
     level: int
 
     def __post_init__(self) -> None:
-        """Trace generated construction after all immutable fields are assigned."""
-        for action in ("entry", "returned"):
+        """Validate coordinates; the reader owns canonical zones and membership."""
+        if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "function=warehouse.domain.location.Location.__post_init__ action=%s "
+                "function=warehouse.domain.location.Location.__post_init__ action=entry "
                 "constructor=warehouse.domain.location.Location.__init__ "
                 "zone=%s aisle=%s rack=%s level=%s",
-                action, self.zone, self.aisle, self.rack, self.level,
+                self.zone, _diagnostic_text(self.aisle), _diagnostic_text(self.rack),
+                _diagnostic_text(self.level),
+                extra={"location": (self.zone, self.aisle, self.rack, self.level)},
+            )
+        for name, value in (("aisle", self.aisle), ("rack", self.rack), ("level", self.level)):
+            if type(value) is not int or value < 0:
+                raise ValueError(
+                    f"Location {name} must be a nonnegative integer: "
+                    f"{_diagnostic_text(value, conversion='r')}"
+                )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "function=warehouse.domain.location.Location.__post_init__ action=returned "
+                "constructor=warehouse.domain.location.Location.__init__ "
+                "zone=%s aisle=%s rack=%s level=%s",
+                self.zone, _diagnostic_text(self.aisle), _diagnostic_text(self.rack),
+                _diagnostic_text(self.level),
                 extra={"location": (self.zone, self.aisle, self.rack, self.level)},
             )
 

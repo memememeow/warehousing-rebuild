@@ -7,7 +7,10 @@ and callable coverage in `test_state.py`. Step 03 enum contracts, canonical role
 keys, typed consumers, cold imports and diagnostic serialization are exercised
 across those files and `test_workflows.py`. Step 04 lookup, SKU validation,
 immutability and diagnostic tests run in `test_input_readers.py`, `test_state.py`
-and `test_outputs.py`; cold imports now include ProductCatalog. Other
+and `test_outputs.py`; cold imports now include ProductCatalog. Step 05 real-file
+validation, immutable publication, decoder limits/nonstandard constants and
+loader diagnostics run in `test_configuration.py`; launcher fixtures now use
+real configuration. Other
 requirements remain unverified until their implementation and tests pass.
 
 Observed Step 02 results and the status of each numbered requirement are in
@@ -21,6 +24,13 @@ are recorded in [the Step 03 audit](StepAudits/step_03_audit.md).
 Observed Step 04 requirements, runtime probes and later-owner deferrals are in
 [the Step 04 audit](StepAudits/step_04_audit.md). `test_identifiers.py` retains the Step 14
 counter checks as planned work; no stub or mocked registry establishes them.
+
+Current-checkout Step 05 evidence is appended to
+[the Step 05 audit](StepAudits/step_05_audit.md), separately from its historical
+entry. The user's 2026-11-04 instruction requires every numeric field and accepts
+supplied positive `first_*` values, overriding v11's fixed starts of one.
+Numeric initialization (06), complete order validation (07), run folders (08)
+and the real-registry guarantees (14) remain planned work.
 
 Use standard-library unittest, deterministic fixtures, temporary directories and
 mocked clock or I/O boundaries. Initialize numeric settings once per test process;
@@ -42,7 +52,7 @@ run alternate configurations and timezone cases in separate processes.
 | Order acceptance | OrderRegistry | Unknown products, missing locations and valid duplicate lines | Rejected orders consume no IDs; accepted duplicates remain distinct orders | Unit |
 | Batch boundaries | OrderRegistry | Zero, one, three, four and five accepted orders | Oldest full batches and one final partial batch form without an extra empty request | Unit |
 | Input closure | OrderRegistry | Repeated closure and acceptance after closure | No duplicate final request; new orders are rejected without changing counters | Unit |
-| Identifier allocation | OrderRegistry, LoadingWorkflow | Controlled aware times, large counters and truck replacement | Counters start at one, widths are minimums and numeric request sequence remains independent | Unit |
+| Identifier allocation | OrderRegistry, LoadingWorkflow | Controlled aware times, large counters and truck replacement | Use validated configured starts (sample: one), widths are minimums and numeric request sequence remains independent | Unit |
 | Local time | OrderRegistry, OutputWriter | Naive datetimes, daylight-saving boundaries and repeated local minutes | Naive values fail; each aware instant uses its local offset; counters preserve uniqueness | Integration |
 | Request lifecycle | FulfillmentRequest and active workflows | Every allowed transition plus illegal transitions | Only legal transitions commit; fixed request data remains read-only | Unit |
 | Route coverage | RoutePlanner, PickingWorkflow | Duplicate locations, missing occurrences, invented locations and shared locations | Valid routes preserve every occurrence; invalid routes do not dequeue work | Unit |

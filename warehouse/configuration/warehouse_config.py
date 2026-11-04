@@ -1,4 +1,4 @@
-"""Declare the immutable, validated startup snapshot.
+"""Retain the immutable, validated startup snapshot.
 
 The snapshot retains catalog references, traversal order, initial overrides,
 employees and identifier settings. Numeric values are startup evidence; runtime
@@ -15,13 +15,14 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
+from types import MappingProxyType
 
 from warehouse.domain.location import Location, LocationMap
 from warehouse.domain.product_catalog import ProductCatalog
 from warehouse.domain.worker_type import WorkerType
+from warehouse.file_io.activity_log import _diagnostic_text
 
 logger = logging.getLogger("warehouse")
-# TODO: Copy and freeze mapping inputs before publishing validated settings.
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +38,7 @@ class WarehouseConfig:
     location_map: LocationMap
     initial_stock: Mapping[Location, int]
     employees: Mapping[WorkerType, tuple[str, ...]]
-    
+
     default_stock: int
     replenishment_threshold: int
 
@@ -56,19 +57,31 @@ class WarehouseConfig:
     request_timestamp_format: str
 
     def __post_init__(self) -> None:
-        """Trace generated construction without implementing snapshot validation."""
+        """Freeze defensive reference copies; ConfigLoader validates scalar inputs."""
         if logger.isEnabledFor(logging.DEBUG):
             settings = {
                 field.name: getattr(self, field.name) for field in fields(self)
                 if field.name != "catalog"
             }
-            for action in ("entry", "returned"):
-                logger.debug(
-                    "function=warehouse.configuration.warehouse_config.WarehouseConfig."
-                    "__post_init__ action=%s constructor=warehouse.configuration."
-                    "warehouse_config.WarehouseConfig.__init__ settings=%s "
-                    "catalog_type=%s",
-                    action, settings, type(self.catalog).__qualname__,
-                    extra={"row_count": len(self.location_map)},
-                )
+            logger.debug(
+                "function=warehouse.configuration.warehouse_config.WarehouseConfig."
+                "__post_init__ action=entry constructor=warehouse.configuration."
+                "warehouse_config.WarehouseConfig.__init__ settings=%s catalog_type=%s",
+                _diagnostic_text(settings), type(self.catalog).__qualname__,
+                extra={"row_count": len(self.location_map)},
+            )
+        locations = MappingProxyType(dict(self.location_map))
+        stock = MappingProxyType(dict(self.initial_stock))
+        employees = MappingProxyType({role: tuple(names) for role, names in self.employees.items()})
+        object.__setattr__(self, "location_map", locations)
+        object.__setattr__(self, "initial_stock", stock)
+        object.__setattr__(self, "employees", employees)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "function=warehouse.configuration.warehouse_config.WarehouseConfig."
+                "__post_init__ action=returned constructor=warehouse.configuration."
+                "warehouse_config.WarehouseConfig.__init__ settings=%s catalog_type=%s",
+                _diagnostic_text(settings), type(self.catalog).__qualname__,
+                extra={"row_count": len(self.location_map)},
+            )
 

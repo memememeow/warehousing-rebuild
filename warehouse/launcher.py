@@ -16,8 +16,9 @@ completion details use DEBUG. Keep debug mode outside configuration and state.
 Planned run command: python3.15 warehouse --config CONFIG --orders ORDERS --debug T
 Omitting --debug or supplying --debug F suppresses DEBUG details only.
 Planned usage command: python3.15 warehouse --help
-CONFIG and ORDERS are argument placeholders. CLI parsing, path resolution and
-console logging are implemented; preflight and simulation remain deferred.
+CONFIG and ORDERS are argument placeholders. CLI parsing, path resolution,
+console logging and configuration validation are implemented. Numeric startup,
+complete order-file validation, output setup and simulation remain deferred.
 """
 
 from __future__ import annotations
@@ -26,9 +27,13 @@ import argparse
 import logging
 import sys
 from collections.abc import Mapping, Sequence
+from copy import copy
 from pathlib import Path
 
-from warehouse.file_io.activity_log import DIAGNOSTIC_FIELDS, _context_fields, _format_context
+from warehouse.configuration.config_loader import ConfigLoader
+from warehouse.file_io.activity_log import (
+    DIAGNOSTIC_FIELDS, _context_fields, _diagnostic_text, _format_context,
+)
 
 logger = logging.getLogger("warehouse")
 
@@ -41,10 +46,20 @@ class _CheckedStreamHandler(logging.StreamHandler):
     """
 
     def emit(self, record: logging.LogRecord) -> None:
-        text = self.format(record) + self.terminator
-        if self.stream.write(text) != len(text):
-            raise OSError("console stream did not write the complete diagnostic")
-        self.flush()
+        try:
+            record = copy(record)
+            for field in DIAGNOSTIC_FIELDS:
+                if field in record.__dict__:
+                    record.__dict__[field] = _diagnostic_text(record.__dict__[field])
+            text = self.format(record) + self.terminator
+            if self.stream.write(text) != len(text):
+                raise OSError("console stream did not write the complete diagnostic")
+            self.flush()
+        except (OSError, ValueError) as error:
+            # Preserve type, identity and traceback while distinguishing transport
+            # from input errors raised by configuration readers and callbacks.
+            error.warehouse_logging_failure = True
+            raise
 
 
 def _below_warning(record: logging.LogRecord) -> bool:
@@ -128,7 +143,7 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
 
 
 def warehouse(argv: Sequence[str]) -> int:
-    """Parse CLI paths without reading inputs or starting the simulation.
+    """Resolve CLI paths and validate configuration before later startup owners.
 
     Configure logging before the deferred preflight and numeric initialization.
     Preserve checked INFO command mirrors in both modes and use direct stderr
@@ -148,43 +163,64 @@ def warehouse(argv: Sequence[str]) -> int:
     except (OSError, ValueError) as error:
         _report_logging_failure(error, context)
         return 1
-    working_directory = Path.cwd()
-    context["working_directory"] = working_directory
-    config_path = (working_directory / arguments.config).resolve()
-    context["config_resolved"] = config_path
-    orders_path = (working_directory / arguments.orders).resolve()
-    context["orders_resolved"] = orders_path
-
-    # TODO (steps 03-07): Complete preflight, then initialize owner constants.
+    # TODO (step 06): Initialize validated owner constants once before state.
+    # TODO (step 07): Validate complete order-file grammar before state/output.
     # TODO (step 08): Create the unique run folder before simulation.
     # TODO (steps 11, 20-23): Construct state/dependencies, run and publish results.
     try:
+        working_directory = Path.cwd()
+        context["working_directory"] = working_directory
+        config_path = (working_directory / arguments.config).resolve()
+        context["config_resolved"] = config_path
+        orders_path = (working_directory / arguments.orders).resolve()
+        context["orders_resolved"] = orders_path
         # Report startup entry/results only after successful parsing permits setup.
         # Help and argument errors must never configure logging or emit diagnostics.
-        logger.debug(
-            "function=warehouse.launcher.warehouse action=entry %s",
-            _format_context(context),
-        )
-        logger.debug(
-            "function=warehouse.launcher._parse_arguments action=entry %s",
-            _format_context(context),
-        )
-        logger.debug(
-            "function=warehouse.launcher._parse_arguments action=returned "
-            "%s", _format_context(context),
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "function=warehouse.launcher.warehouse action=entry %s",
+                _format_context(context),
+            )
+            logger.debug(
+                "function=warehouse.launcher._parse_arguments action=entry %s",
+                _format_context(context),
+            )
+            logger.debug(
+                "function=warehouse.launcher._parse_arguments action=returned %s",
+                _format_context(context),
+            )
+        config = ConfigLoader(working_directory).load_config(config_path)
+    except (OSError, ValueError) as error:
+        if getattr(error, "warehouse_logging_failure", False):
+            _report_logging_failure(error, context)
+            return 1
+        try:
+            logger.error(
+                "function=warehouse.launcher.warehouse action=aborted result=INCOMPLETE "
+                "reason=configuration_failed error=%r; config supplied=%r resolved=%r; "
+                "orders supplied=%r resolved=%r; last_confirmed_trace_line=n/a %s",
+                str(error), arguments.config, str(context["config_resolved"]),
+                arguments.orders, str(context["orders_resolved"]), _format_context(context),
+            )
+        except (OSError, ValueError) as transport_error:
+            _report_logging_failure(transport_error, context)
+        return 1
+    try:
         logger.error(
             "function=warehouse.launcher.warehouse action=aborted "
-            "simulation startup is not implemented; "
+            "configuration validated; simulation startup is not implemented; "
+            "numeric initialization (06), order validation (07), run folder (08) and "
+            "later simulation owners remain deferred; "
             "config supplied=%r, resolved=%r; orders supplied=%r, resolved=%r "
             "result=INCOMPLETE last_confirmed_trace_line=n/a %s",
             arguments.config, str(config_path), arguments.orders, str(orders_path),
             _format_context(context),
         )
-        logger.debug(
-            "function=warehouse.launcher.warehouse action=returned exit_code=1 "
-            "%s", _format_context(context),
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "function=warehouse.launcher.warehouse action=returned exit_code=1 "
+                "validated_locations=%s %s", len(config.location_map), _format_context(context),
+            )
     except (OSError, ValueError) as error:
         _report_logging_failure(error, context)
     return 1

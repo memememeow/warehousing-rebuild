@@ -130,16 +130,31 @@ class ConsoleLoggingTests(unittest.TestCase):
         warehouse(["--config", "Config.JSON", "--orders", "Orders.TXT", "--debug", "T"])
         for line in (self.stdout.getvalue() + self.stderr.getvalue()).splitlines():
             with self.subTest(line=line):
+                is_reader = "function=warehouse.configuration.config_loader." in line
+                is_loader_constructor = "ConfigLoader.__init__ " in line
                 for field in (
                     "run_directory", "request_id", "request_sequence", "order_ids",
                     "truck_id", "worker_type", "worker", "source", "line_number",
                     "path", "row_count", "sku_evidence", "status_before", "status_after",
                     "location", "stock_before", "stock_after",
                 ):
+                    if is_reader and not is_loader_constructor and field == "source":
+                        if "ConfigLoader.load_config" in line:
+                            self.assertIn(f"source={Path('Config.JSON').resolve()}", line)
+                        else:
+                            self.assertIn(f"source=config supplied={str(Path('Config.JSON').resolve())!r}", line)
+                        continue
+                    if is_reader and not is_loader_constructor and field == "path":
+                        self.assertIn(f"path={Path('Config.JSON').resolve()}", line)
+                        continue
                     self.assertIn(f"{field}=n/a", line)
-                if "function=warehouse.launcher._configure_console_logging " not in line:
+                if is_loader_constructor:
+                    if "action=returned" in line:
+                        self.assertIn(f"output_parent={Path.cwd()}", line)
+                elif "function=warehouse.launcher._configure_console_logging " not in line:
                     self.assertIn("Config.JSON", line)
-                    self.assertIn("Orders.TXT", line)
+                    if not is_reader:
+                        self.assertIn("Orders.TXT", line)
 
     def test_logging_setup_helper_has_debug_entry_and_result(self) -> None:
         _configure_console_logging(logging.DEBUG)

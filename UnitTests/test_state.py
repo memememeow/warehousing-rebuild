@@ -12,6 +12,7 @@ import io
 import json
 import logging
 import re
+import tempfile
 import unittest
 from collections import UserDict
 from contextlib import redirect_stderr, redirect_stdout
@@ -21,6 +22,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from UnitTests import assert_callable_traces, isolated_console_logging
+from UnitTests.test_configuration import write_configuration
 from warehouse.configuration.warehouse_config import WarehouseConfig
 from warehouse.domain.location import Location
 from warehouse.domain.order import Order
@@ -191,17 +193,21 @@ class ConstructorDiagnosticTests(unittest.TestCase):
                 _configure_console_logging(threshold)
                 location = Location("A", 0, 1, 2)
                 order = Order("O0001", "Model", "Blue", "1", "2")
-                locations = {"1": location, "2": location}
+                locations = {"1": location, "2": Location("A", 0, 1, 3)}
                 planner = RoutePlanner(locations)
                 catalog = ProductCatalog({("Model", "Blue"): ("1", "2")})
                 self.assertEqual(catalog.resolve_skus(" MODEL ", "blue"), ("1", "2"))
                 config = WarehouseConfig(
                     Path("Translation.CSV"), Path("Traversal.CSV"), Path("Stock.CSV"),
-                    catalog, locations, {location: 6}, {}, 30, 5, 4, 4, 5,
+                    catalog, locations, {location: 6},
+                    {role: (name,) for role, name in zip(WorkerType, ("Alice", "Sue", "Bill", "Ruby"))},
+                    30, 5, 4, 4, 5,
                     4, 3, 3, 1, 1, 1, "%Y%m%d%H%M",
                 )
                 self.assertIs(config.catalog, catalog)
-                self.assertIs(config.location_map, locations)
+                self.assertIsNot(config.location_map, locations)
+                self.assertEqual(dict(config.location_map), locations)
+                self.assertIs(config.location_map["1"], location)
                 self.assertIs(planner.location_map, locations)
                 self.assertEqual(order.id, "O0001")
                 self.assertEqual(hash(location), hash(Location("A", 0, 1, 2)))
@@ -246,9 +252,11 @@ class ConstructorDiagnosticTests(unittest.TestCase):
             )
             log = ActivityLog(Path("unused-run"), stdout)
             log.mark_incomplete("fixture", {})
-            warehouse([
-                "--config", "Config.JSON", "--orders", "Orders.TXT", "--debug", "T"
-            ])
+            with tempfile.TemporaryDirectory() as temporary:
+                config_path, _ = write_configuration(Path(temporary).resolve() / "Inputs")
+                warehouse([
+                    "--config", str(config_path), "--orders", "Orders.TXT", "--debug", "T"
+                ])
         traced = set(re.findall(r"\[DEBUG\] function=(\S+) action=entry", stdout.getvalue()))
         assert_callable_traces(self, stdout.getvalue(), tuple(sorted(traced)))
         # Emit/format/filter/fallback functions cannot recursively trace transport.
@@ -259,6 +267,9 @@ class ConstructorDiagnosticTests(unittest.TestCase):
             "warehouse.launcher._report_logging_failure",
             "warehouse.file_io.activity_log._context_fields",
             "warehouse.file_io.activity_log._format_context",
+            # Recursive value rendering is part of formatting transport; tracing
+            # it through the handler would recursively render its own arguments.
+            "warehouse.file_io.activity_log._diagnostic_text",
             "warehouse.file_io.activity_log.ActivityLog.feedback",
         }
         implemented: set[str] = set()

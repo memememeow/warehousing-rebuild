@@ -1,8 +1,9 @@
-"""Verify CLI, product lookup and canonical roles; reserve input-file validation.
+"""Verify CLI, product lookup and canonical roles alongside real configuration.
 
-Future cases cover launch-relative and config-relative references, absolute
-inputs, missing files, malformed JSON and CSVs, mixed case, normalization
-collisions, SKU coverage, employee roles and preserved order source context.
+Configuration cases in test_configuration cover launch-relative and config-relative
+references, absolute inputs, missing files, malformed JSON and CSVs, mixed case,
+normalization collisions, SKU coverage and employee roles. Future OrderReader
+cases must check grammar and preserved order source context.
 
 Launcher cases cover omitted --debug (default F), explicit T/F, lowercase
 and other invalid values, missing values and help documenting the default.
@@ -28,6 +29,7 @@ from typing import get_type_hints
 from unittest.mock import patch
 
 from UnitTests import assert_callable_traces, isolated_console_logging
+from UnitTests.test_configuration import write_configuration
 from warehouse.configuration.warehouse_config import WarehouseConfig
 from warehouse.domain.product_catalog import ProductCatalog
 from warehouse.domain.worker_type import WorkerType
@@ -266,38 +268,38 @@ class LauncherTests(unittest.TestCase):
 
     def test_valid_startup_captures_launch_directory_once(self) -> None:
         original_directory = Path.cwd()
-        with (
-            patch("warehouse.launcher.Path.cwd", return_value=original_directory) as cwd,
-            patch("os.chdir") as chdir,
-            patch("builtins.open") as open_file,
-            patch("io.open") as path_open,
-            patch("os.mkdir") as mkdir,
-            redirect_stderr(io.StringIO()) as stderr,
-        ):
-            result = warehouse(
-                ["--config", "./Input/../Config.JSON", "--orders", "./Orders.TXT"]
-            )
+        with tempfile.TemporaryDirectory() as temporary:
+            launch_directory = Path(temporary).resolve()
+            config, _ = write_configuration(launch_directory / "Input Files")
+            with (
+                patch("warehouse.launcher.Path.cwd", return_value=launch_directory) as cwd,
+                patch("os.chdir") as chdir,
+                patch("builtins.open", wraps=open) as open_file,
+                patch("io.open", wraps=io.open) as path_open,
+                patch("os.mkdir") as mkdir,
+                redirect_stderr(io.StringIO()) as stderr,
+            ):
+                result = warehouse([
+                    "--config", "./Input Files/../Input Files/Config.JSON", "--orders", "./Orders.TXT"
+                ])
+            self.assertIn("supplied='./Input Files/../Input Files/Config.JSON'", stderr.getvalue())
+            self.assertIn(f"resolved={str(config)!r}", stderr.getvalue())
+            self.assertIn(f"resolved={str(launch_directory / 'Orders.TXT')!r}", stderr.getvalue())
+            self.assertIn("configuration validated", stderr.getvalue())
         self.assertEqual(result, 1)
         cwd.assert_called_once_with()
-        for boundary in (chdir, open_file, path_open, mkdir):
+        for boundary in (chdir, open_file, mkdir):
             boundary.assert_not_called()
-        self.assertIn("supplied='./Input/../Config.JSON'", stderr.getvalue())
-        self.assertIn(
-            f"resolved={str(original_directory / 'Config.JSON')!r}", stderr.getvalue()
-        )
-        self.assertIn(
-            f"resolved={str(original_directory / 'Orders.TXT')!r}", stderr.getvalue()
-        )
+        self.assertEqual(path_open.call_count, 4)
         self.assertEqual(Path.cwd(), original_directory)
 
     def test_executable_paths_and_no_artifacts_from_different_directories(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture_root = Path(temporary).resolve()
             inputs = fixture_root / "Input Files"
-            inputs.mkdir()
-            config = inputs / "Config.JSON"
+            config, _ = write_configuration(inputs)
+            original_config = config.read_text(encoding="utf-8")
             orders = inputs / "Orders.TXT"
-            config.write_text("Intentionally unprocessed configuration", encoding="utf-8")
             orders.write_text("Intentionally unprocessed orders", encoding="utf-8")
             launch_directory = fixture_root / "Other Launch"
             launch_directory.mkdir()
@@ -346,7 +348,7 @@ class LauncherTests(unittest.TestCase):
                         self.assertEqual(sorted(fixture_root.rglob("*")), before)
             self.assertEqual(
                 config.read_text(encoding="utf-8"),
-                "Intentionally unprocessed configuration",
+                original_config,
             )
             self.assertEqual(
                 orders.read_text(encoding="utf-8"), "Intentionally unprocessed orders"
@@ -374,4 +376,4 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(Path.cwd(), original_directory)
 
 
-# TODO: Add deterministic reader fixtures and rejection cases with source context.
+# TODO (step 07): Add real order-reader grammar and source-context cases.

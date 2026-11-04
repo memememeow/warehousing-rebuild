@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, TextIO
 
@@ -42,9 +43,42 @@ def _context_fields(context: Mapping[str, object]) -> dict[str, object]:
 def _format_context(context: Mapping[str, object]) -> str:
     """Expand diagnostic evidence without abbreviating collections of IDs."""
     return " ".join(
-        f"{name}={value if value is not None else 'n/a'}"
+        f"{name}={_diagnostic_text(value) if value is not None else 'n/a'}"
         for name, value in context.items()
     )
+
+
+def _diagnostic_text(value: object, *, conversion: Literal["s", "r"] = "s") -> str:
+    """Render complete numeric evidence without Python's decimal conversion cap.
+
+    This is recursive diagnostic transport, so it must not log through itself.
+    Strings retain the caller's str/repr convention; containers quote their items.
+    """
+    if type(value) is int:
+        magnitude = abs(value)
+        chunks: list[int] = []
+        while magnitude >= 1_000_000_000:
+            magnitude, remainder = divmod(magnitude, 1_000_000_000)
+            chunks.append(remainder)
+        return ("-" if value < 0 else "") + str(magnitude) + "".join(
+            f"{chunk:09d}" for chunk in reversed(chunks)
+        )
+    if isinstance(value, Mapping):
+        return "{" + ", ".join(
+            f"{_diagnostic_text(key, conversion='r')}: {_diagnostic_text(item, conversion='r')}"
+            for key, item in value.items()
+        ) + "}"
+    if isinstance(value, (tuple, list)):
+        items = ", ".join(_diagnostic_text(item, conversion="r") for item in value)
+        if isinstance(value, tuple):
+            return "(" + items + ("," if len(value) == 1 else "") + ")"
+        return "[" + items + "]"
+    if is_dataclass(value) and not isinstance(value, type):
+        return type(value).__qualname__ + "(" + ", ".join(
+            f"{field.name}={_diagnostic_text(getattr(value, field.name), conversion='r')}"
+            for field in fields(value) if field.repr
+        ) + ")"
+    return repr(value) if conversion == "r" else str(value)
 
 
 # TODO (step 21): Serialize checked INFO mirrors and track confirmed trace appends.

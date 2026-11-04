@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from warehouse.domain.location import Location, LocationMap
+from warehouse.file_io.activity_log import _diagnostic_text
 
 logger = logging.getLogger("warehouse")
 
@@ -36,7 +37,8 @@ class RoutePlanner:
                     "function=warehouse.routing.route_planner.RoutePlanner.__post_init__ "
                     "action=%s constructor=warehouse.routing.route_planner."
                     "RoutePlanner.__init__ location_map=%s",
-                    action, self.location_map, extra={"row_count": len(self.location_map)},
+                    action, _diagnostic_text(self.location_map),
+                    extra={"row_count": len(self.location_map)},
                 )
 
     def plan_route(self, locations: Sequence[Location]) -> tuple[Location, ...]:
