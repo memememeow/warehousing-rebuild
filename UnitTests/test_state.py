@@ -236,7 +236,7 @@ class ConstructorDiagnosticTests(unittest.TestCase):
                 ):
                     self.assertIn(evidence, stdout.getvalue())
 
-    def test_implemented_callable_inventory_has_trace_or_transport_exemption(self) -> None:
+    def test_implemented_callable_inventory_covers_retained_events_and_silent_numeric_paths(self) -> None:
         self.enterContext(isolated_console_logging())
         with redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()):
             _configure_console_logging(logging.DEBUG)
@@ -272,6 +272,24 @@ class ConstructorDiagnosticTests(unittest.TestCase):
             "warehouse.file_io.activity_log._diagnostic_text",
             "warehouse.file_io.activity_log.ActivityLog.feedback",
         }
+        # The current rules prohibit success/entry/return logs for numeric
+        # initialization. These exact callables are exercised in fresh processes
+        # by test_numeric_initialization; none represents a retained DEBUG event.
+        silent_numeric = {
+            "warehouse.workflow.inventory.initialize_inventory_constants",
+            "warehouse.workflow.inventory.__getattr__",
+            "warehouse.workflow.order_registry.initialize_order_constants",
+            "warehouse.workflow.order_registry.__getattr__",
+            "warehouse.workflow.sequencing_workflow.initialize_sequencing_constants",
+            "warehouse.workflow.sequencing_workflow.__getattr__",
+            "warehouse.domain.truck.initialize_truck_constants",
+            "warehouse.domain.truck.__getattr__",
+            "warehouse.domain.truck.Truck.capacity_requests",
+            "warehouse.workflow.loading_workflow.initialize_loading_constants",
+            "warehouse.workflow.loading_workflow.__getattr__",
+            "warehouse.launcher._initialize_numeric_constants",
+            "warehouse.launcher._numeric_initialization_state",
+        }
         implemented: dict[str, str] = {}
         root = Path(__file__).resolve().parent.parent
         for path in (root / "warehouse").rglob("*.py"):
@@ -297,8 +315,9 @@ class ConstructorDiagnosticTests(unittest.TestCase):
         # Keep full identities in the inventory and require unambiguous short labels.
         self.assertEqual(len(implemented), len(set(implemented.values())))
         transport_labels = {implemented[function] for function in transport}
-        self.assertEqual(set(implemented.values()), traced | transport_labels)
-        self.assertTrue(traced.isdisjoint(transport_labels))
+        numeric_labels = {implemented[function] for function in silent_numeric}
+        self.assertEqual(set(implemented.values()), traced | transport_labels | numeric_labels)
+        self.assertTrue(traced.isdisjoint(transport_labels | numeric_labels))
 
     def test_logging_ownership_and_debug_option_stay_at_the_launcher_boundary(self) -> None:
         root = Path(__file__).resolve().parent.parent

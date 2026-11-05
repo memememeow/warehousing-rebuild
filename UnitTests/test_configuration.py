@@ -496,7 +496,9 @@ class ConfigurationTests(unittest.TestCase):
                 ("domain.truck", ("CAPACITY_REQUESTS",)),
             ):
                 module = importlib.import_module("warehouse." + module_name)
-                self.assertTrue(all(not hasattr(module, name) for name in names))
+                # Unpublished constants now actively reject reads, including
+                # hasattr. Inspect bindings without invoking the read guard.
+                self.assertTrue(all(name not in vars(module) for name in names))
 
     def test_fresh_process_paths_and_independent_configurations_in_all_debug_modes(self) -> None:
         launch = self.root / "Other Launch"

@@ -4,8 +4,8 @@ Only the next request sequence may be assigned. A successful final rescan must
 record the load, advance sequence, update status and clear the assignment in
 one commit. Full trucks depart immediately; a partial truck remains loaded.
 
-Function entry/results, initialized identifier settings, assignments, evidence,
-status changes, successful loads, truck dispatch/replacement and partial-truck
+Assignments, evidence, status changes, successful loads, truck
+dispatch/replacement and partial-truck
 completion details use DEBUG under --debug T. Retain full request/order/truck
 context; buffer nested diagnostics until commits finish. Problems retain
 WARNING/ERROR, while only ActivityLog.record_command emits INFO.
@@ -20,11 +20,25 @@ from warehouse.configuration.warehouse_config import WarehouseConfig
 from warehouse.domain.fulfillment_request import FulfillmentRequest
 from warehouse.domain.truck import Truck
 
-# TODO: Initialize truck ID settings once; preserve global sequence across trucks.
 FIRST_TRUCK_NUMBER: Final[int]
 TRUCK_MINIMUM_DIGITS: Final[int]
 
 type LoadingAssignment = tuple[FulfillmentRequest, tuple[str, ...] | None]
+
+
+def initialize_loading_constants(config: WarehouseConfig) -> None:
+    """Publish validated truck identifier settings once before state exists."""
+    global FIRST_TRUCK_NUMBER, TRUCK_MINIMUM_DIGITS
+    if any(name in globals() for name in ("FIRST_TRUCK_NUMBER", "TRUCK_MINIMUM_DIGITS")):
+        raise RuntimeError("loading_workflow numeric constants already initialized")
+    FIRST_TRUCK_NUMBER, TRUCK_MINIMUM_DIGITS = config.first_truck_number, config.truck_minimum_digits
+
+
+def __getattr__(name: str) -> object:
+    """Reject numeric reads before explicit startup publication."""
+    if name in ("FIRST_TRUCK_NUMBER", "TRUCK_MINIMUM_DIGITS"):
+        raise RuntimeError(f"loading_workflow.{name} read before numeric initialization")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class LoadingWorkflow:
@@ -41,7 +55,12 @@ class LoadingWorkflow:
     dispatched_trucks: list[Truck]
 
     def __init__(self, config: WarehouseConfig) -> None:
-        """Establish loading collections, the first truck and numeric expectations."""
+        """Establish loading collections, the first truck and numeric expectations.
+
+        Step 19 must start next_request_number from the module-qualified
+        order_registry.FIRST_REQUEST_NUMBER, then advance it independently.
+        Truck counters use this module's constants and persist across dispatch.
+        """
         ...
 
     def enqueue_request(self, request: FulfillmentRequest) -> None:

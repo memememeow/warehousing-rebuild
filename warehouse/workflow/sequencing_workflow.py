@@ -4,8 +4,8 @@ Assignments retain a canonical request and optional staged evidence. Rescans
 compare both observations with N fronts followed by N backs. Content failure
 clears the assignment and returns the same request for picking rework.
 
-Function entry/results, initialized capacity, FIFO assignments, staged/rescanned
-SKU evidence and committed status/rework details use DEBUG under --debug T.
+FIFO assignments, staged/rescanned SKU evidence and committed status/rework
+details use DEBUG under --debug T.
 Preserve WARNING/ERROR for problems and buffer nested diagnostics until related
 updates finish. Emit no INFO outside ActivityLog.record_command.
 """
@@ -16,14 +16,30 @@ from collections import deque
 from collections.abc import Sequence
 from typing import Final
 
+from warehouse.configuration.warehouse_config import WarehouseConfig
 from warehouse.domain.fulfillment_request import FulfillmentRequest
 
-# TODO: Initialize capacity once and preserve evidence on invalid worker or stage.
 PALLET_CAPACITY_FASCIA: Final[int]
 
 type SequencingAssignment = tuple[FulfillmentRequest, tuple[str, ...] | None]
 
 
+def initialize_sequencing_constants(config: WarehouseConfig) -> None:
+    """Publish the validated pallet capacity once before state exists."""
+    global PALLET_CAPACITY_FASCIA
+    if "PALLET_CAPACITY_FASCIA" in globals():
+        raise RuntimeError("sequencing_workflow numeric constants already initialized")
+    PALLET_CAPACITY_FASCIA = config.pallet_capacity_fascia
+
+
+def __getattr__(name: str) -> object:
+    """Reject numeric reads before explicit startup publication."""
+    if name == "PALLET_CAPACITY_FASCIA":
+        raise RuntimeError(f"sequencing_workflow.{name} read before numeric initialization")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# Step 18 owns pallet calculations and evidence preservation on invalid commands.
 class SequencingWorkflow:
     """Own marshalled work, sequencing assignments and content-validation results."""
 

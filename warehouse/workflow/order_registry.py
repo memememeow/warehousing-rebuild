@@ -4,9 +4,8 @@ Product and location validation precede identity allocation. Independent order
 and request counters advance only on acceptance or creation. End-of-input
 closure may form one final partial request and must remain idempotent.
 
-Function entry/results, initialized numeric settings, accepted order IDs,
-request creation and input closure use DEBUG under --debug T, including every
-available order ID. Buffer diagnostics inside related commits; rejections use
+Accepted order IDs, request creation and input closure use DEBUG under --debug T,
+including every available order ID. Buffer diagnostics inside related commits; rejections use
 WARNING and invariant failures use ERROR. Emit no separate INFO events.
 """
 
@@ -20,12 +19,39 @@ from warehouse.configuration.warehouse_config import WarehouseConfig
 from warehouse.domain.fulfillment_request import FulfillmentRequest
 from warehouse.domain.order import Order
 
-# TODO: Initialize each numeric setting once after complete preflight validation.
 ORDERS_PER_REQUEST: Final[int]
 FIRST_ORDER_NUMBER: Final[int]
 ORDER_MINIMUM_DIGITS: Final[int]
 FIRST_REQUEST_NUMBER: Final[int]
 REQUEST_MINIMUM_DIGITS: Final[int]
+
+
+def initialize_order_constants(config: WarehouseConfig) -> None:
+    """Publish validated batch and identifier settings once before state exists."""
+    global ORDERS_PER_REQUEST, FIRST_ORDER_NUMBER, ORDER_MINIMUM_DIGITS
+    global FIRST_REQUEST_NUMBER, REQUEST_MINIMUM_DIGITS
+    if any(name in globals() for name in (
+        "ORDERS_PER_REQUEST", "FIRST_ORDER_NUMBER", "ORDER_MINIMUM_DIGITS",
+        "FIRST_REQUEST_NUMBER", "REQUEST_MINIMUM_DIGITS",
+    )):
+        raise RuntimeError("order_registry numeric constants already initialized")
+    (
+        ORDERS_PER_REQUEST, FIRST_ORDER_NUMBER, ORDER_MINIMUM_DIGITS,
+        FIRST_REQUEST_NUMBER, REQUEST_MINIMUM_DIGITS,
+    ) = (
+        config.orders_per_request, config.first_order_number, config.order_minimum_digits,
+        config.first_request_number, config.request_minimum_digits,
+    )
+
+
+def __getattr__(name: str) -> object:
+    """Reject numeric reads before explicit startup publication."""
+    if name in (
+        "ORDERS_PER_REQUEST", "FIRST_ORDER_NUMBER", "ORDER_MINIMUM_DIGITS",
+        "FIRST_REQUEST_NUMBER", "REQUEST_MINIMUM_DIGITS",
+    ):
+        raise RuntimeError(f"order_registry.{name} read before numeric initialization")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class OrderRegistry:

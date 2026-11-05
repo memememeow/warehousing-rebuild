@@ -6,9 +6,9 @@ Reserves are unlimited; sequencing rework never credits previous reductions.
 StockChange records location, before, after decrement and final quantity;
 manual refill uses the reset quantity for both after and final values.
 
-All function entry/results, initialized numeric values, quantity queries, stock
-decrements, threshold decisions, refill changes and snapshots use DEBUG under
---debug T. Buffer diagnostics until related pick and inventory commits finish;
+Useful quantity queries, stock decrements, threshold decisions, refill changes
+and snapshots use DEBUG under --debug T. Buffer diagnostics until related pick
+and inventory commits finish;
 problems retain WARNING/ERROR. Inventory emits no INFO lifecycle records.
 """
 
@@ -21,13 +21,28 @@ from typing import Final
 from warehouse.configuration.warehouse_config import WarehouseConfig
 from warehouse.domain.location import Location
 
-# TODO: Initialize defaults once and implement stock commits without boundary I/O.
 DEFAULT_STOCK: Final[int]
 REPLENISHMENT_THRESHOLD: Final[int]
 
 type StockChange = tuple[Location, int, int, int]
 
 
+def initialize_inventory_constants(config: WarehouseConfig) -> None:
+    """Publish validated settings once; schema/range checks belong to ConfigLoader."""
+    global DEFAULT_STOCK, REPLENISHMENT_THRESHOLD
+    if any(name in globals() for name in ("DEFAULT_STOCK", "REPLENISHMENT_THRESHOLD")):
+        raise RuntimeError("inventory numeric constants already initialized")
+    DEFAULT_STOCK, REPLENISHMENT_THRESHOLD = config.default_stock, config.replenishment_threshold
+
+
+def __getattr__(name: str) -> object:
+    """Reject numeric reads before explicit startup publication."""
+    if name in ("DEFAULT_STOCK", "REPLENISHMENT_THRESHOLD"):
+        raise RuntimeError(f"inventory.{name} read before numeric initialization")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# Step 16 owns stock commits without boundary I/O, using the constants above.
 class Inventory:
     """Own every mapped quantity and the synchronously drained refill queue."""
 
