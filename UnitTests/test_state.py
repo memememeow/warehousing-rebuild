@@ -30,6 +30,7 @@ from warehouse.domain.product_catalog import ProductCatalog
 from warehouse.domain.request_status import RequestStatus
 from warehouse.domain.worker_type import WorkerType
 from warehouse.file_io.activity_log import ActivityLog
+from warehouse.file_io.order_reader import OrderReader
 from warehouse.launcher import _configure_console_logging, warehouse
 from warehouse.routing.route_planner import RoutePlanner
 
@@ -226,6 +227,9 @@ class ConstructorDiagnosticTests(unittest.TestCase):
         # Count source sites, including the two distinct SKU rejection branches.
         expected = Counter({
             ("warehouse.launcher.warehouse", "launcher.warehouse", "entry"): 1,
+            ("warehouse.file_io.order_reader.OrderReader.read_orders", "order_reader.read_orders", "validated"): 1,
+            ("warehouse.file_io.order_reader.OrderReader.read_orders", "order_reader.read_orders", "rejected"): 2,
+            ("warehouse.file_io.order_reader.OrderReader.parse_order", "order_reader.parse_order", "rejected"): 1,
             ("warehouse.configuration.config_loader.ConfigLoader.load_config", "config_loader.load_config", "entry"): 1,
             ("warehouse.configuration.config_loader._read_json", "config_loader._read_json", "entry"): 1,
             ("warehouse.configuration.config_loader._read_csv", "config_loader._read_csv", "entry"): 1,
@@ -261,9 +265,19 @@ class ConstructorDiagnosticTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()):
             with tempfile.TemporaryDirectory() as temporary:
                 config_path, _ = write_configuration(Path(temporary).resolve() / "Inputs")
+                orders_path = config_path.parent / "Orders.TXT"
+                orders_path.write_text("Order missing", encoding="utf-8")
                 self.assertEqual(warehouse([
-                    "--config", str(config_path), "--orders", "Orders.TXT", "--debug", "T",
+                    "--config", str(config_path), "--orders", str(orders_path), "--debug", "T",
                 ]), 1)
+                reader = OrderReader()
+                with self.assertRaises(OSError):
+                    reader.read_orders(config_path.parent / "Missing.TXT")
+                orders_path.write_bytes(b"\xff")
+                with self.assertRaises(ValueError):
+                    reader.read_orders(orders_path)
+                orders_path.write_text("\nOrder Unknown Purple", encoding="utf-8")
+                self.assertEqual(reader.read_orders(orders_path), ((2, "Unknown", "Purple"),))
             catalog = ProductCatalog({("Model", "Blue"): ("1", "2")})
             with self.assertRaises(ValueError):
                 catalog.resolve_skus("Unknown", "Blue")
@@ -280,6 +294,8 @@ class ConstructorDiagnosticTests(unittest.TestCase):
         emitted = Counter()
         contexts = {
             "launcher.warehouse": ("config_supplied=", "orders_supplied=", "console_level=DEBUG"),
+            "order_reader.read_orders": ("path=",),
+            "order_reader.parse_order": ("path=", "line=", "field_count=", "fields=", "reason=invalid_grammar"),
             "config_loader.load_config": ("supplied=", "source=", "path="),
             "config_loader._read_json": ("source=", "path="),
             "config_loader._read_csv": ("headers=", "source=", "path="),
@@ -296,6 +312,16 @@ class ConstructorDiagnosticTests(unittest.TestCase):
             self.assertNotIn("=n/a", line)
             for evidence in contexts[label]:
                 self.assertIn(evidence, line)
+            if label == "order_reader.read_orders":
+                if action == "validated":
+                    for evidence in ("byte_count=", "line_count=2", "order_count=1", "blank_count=1"):
+                        self.assertIn(evidence, line)
+                elif "reason=invalid_utf8" in line:
+                    self.assertIn("byte_offset=0", line)
+                    self.assertIn("byte_end=1", line)
+                else:
+                    self.assertIn("reason=read_failed", line)
+                    self.assertIn("error=", line)
         expected_emissions = Counter({(label, action): count for (identity, label, action), count in expected.items()})
         expected_emissions["config_loader._read_csv", "entry"] = 3
         self.assertEqual(emitted, expected_emissions)

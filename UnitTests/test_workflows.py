@@ -55,6 +55,7 @@ class SharedEnumIntegrationTests(unittest.TestCase):
         modules = (
             "warehouse.domain.worker_type", "warehouse.domain.request_status",
             "warehouse.domain.product_catalog",
+            "warehouse.file_io.order_reader", "warehouse.launcher",
             "warehouse.configuration.config_loader", "warehouse.configuration.warehouse_config",
             "warehouse.domain.fulfillment_request", "warehouse.domain.warehouse_state",
             "warehouse.workflow.warehouse_application", "warehouse.workflow.picking_workflow",

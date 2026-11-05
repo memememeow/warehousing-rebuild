@@ -271,7 +271,7 @@ class NumericInitializationTests(unittest.TestCase):
                 options = {options!r}
                 out, err = io.StringIO(), io.StringIO()
                 with redirect_stdout(out), redirect_stderr(err):
-                    assert warehouse(['--config', str(path_a), '--orders', 'Unvalidated.TXT', *options]) == 1
+                    _configure_console_logging(logging.DEBUG if 'T' in options else logging.INFO)
                     config = ConfigLoader().load_config(path_a)
                     out.seek(0); out.truncate(); err.seek(0); err.truncate()
                     _initialize_numeric_constants(config)
@@ -339,46 +339,143 @@ class NumericInitializationTests(unittest.TestCase):
                     guard.assert_not_called()
         """)
 
-    def test_cli_stops_at_pending_order_preflight_in_all_modes_without_artifacts(self) -> None:
-        self.run_fresh("""
-            orders = path_a.parent / 'orders.txt'
-            for contents in (None, '', 'Order Model Blue\\n', 'Order Model Blue\\nMalformed late line extra\\n'):
-                if contents is not None:
-                    orders.write_text(contents)
-                before = {p: p.read_bytes() for p in path_a.parent.rglob('*') if p.is_file()}
-                for options in ([], ['--debug', 'F'], ['--debug', 'T']):
-                    with ExitStack() as stack:
-                        out = stack.enter_context(redirect_stdout(io.StringIO()))
-                        err = stack.enter_context(redirect_stderr(io.StringIO()))
-                        guards = [stack.enter_context(patch(target)) for target in (
-                            'warehouse.launcher._initialize_numeric_constants',
-                            'warehouse.domain.warehouse_state.WarehouseState',
-                            'warehouse.file_io.order_reader.OrderReader.read_orders',
-                            'warehouse.file_io.output_writer.OutputWriter.create_output_directory',
-                        )]
-                        assert warehouse(['--config', str(path_a), '--orders', str(orders), *options]) == 1
-                        for guard in guards:
-                            guard.assert_not_called()
-                    assert 'pending_order_preflight' in err.getvalue()
-                    assert '[INFO]' not in out.getvalue() + err.getvalue()
-                    assert_unpublished()
-                    assert before == {p: p.read_bytes() for p in path_a.parent.rglob('*') if p.is_file()}
-        """)
+    def test_real_startup_preflights_all_lines_then_initializes_once_in_every_mode(self) -> None:
+        for reverse in (False, True):
+            for contents, expected in (
+                ("", ()), (" \n\t\n", ()),
+                ("\nOrder Model BLUE\n\t\norder Model BLUE\nOrder Unknown Purple",
+                 ((2, "Model", "BLUE"), (4, "Model", "BLUE"), (5, "Unknown", "Purple"))),
+            ):
+                for options in ([], ["--debug", "F"], ["--debug", "T"]):
+                    with self.subTest(reverse=reverse, contents=contents, options=options):
+                        self.run_fresh(f"""
+                            from warehouse.file_io.order_reader import OrderReader
+                            orders_path = path_a.parent / 'orders.txt'
+                            orders_path.write_text({contents!r}, encoding='utf-8')
+                            before = {{p: p.read_bytes() if p.is_file() else None
+                                      for p in path_a.parent.rglob('*')}}
+                            events, returned, lines = [], [], []
+                            real_load = ConfigLoader.load_config
+                            real_read = OrderReader.read_orders
+                            real_parse = OrderReader.parse_order
+                            real_initialize = _initialize_numeric_constants
+                            def load(loader, path):
+                                assert_unpublished()
+                                config = real_load(loader, path)
+                                events.append('config')
+                                returned.append(config)
+                                return config
+                            def parse(reader, text, source, line_number):
+                                assert_unpublished()
+                                lines.append(line_number)
+                                return real_parse(reader, text, source, line_number)
+                            def read(reader, path):
+                                assert events == ['config']
+                                result = real_read(reader, path)
+                                assert type(result) is tuple and result == {expected!r}, result
+                                events.append('orders')
+                                returned.append(result)
+                                return result
+                            def initialize(config):
+                                assert events == ['config', 'orders']
+                                assert sys._getframe(1).f_locals['orders'] is returned[1]
+                                assert_unpublished()
+                                real_initialize(config)
+                                assert_values(config)
+                                events.append('numeric')
+                            out, err = io.StringIO(), io.StringIO()
+                            with ExitStack() as stack:
+                                stack.enter_context(redirect_stdout(out))
+                                stack.enter_context(redirect_stderr(err))
+                                stack.enter_context(patch.object(ConfigLoader, 'load_config', load))
+                                stack.enter_context(patch.object(OrderReader, 'read_orders', read))
+                                stack.enter_context(patch.object(OrderReader, 'parse_order', parse))
+                                stack.enter_context(patch('warehouse.launcher._initialize_numeric_constants', initialize))
+                                guards = [stack.enter_context(patch(target)) for target in (
+                                    'warehouse.domain.warehouse_state.WarehouseState',
+                                    'warehouse.file_io.output_writer.OutputWriter.create_output_directory',
+                                    'warehouse.workflow.warehouse_application.WarehouseApplication.run',
+                                    'os.chdir', 'os.mkdir',
+                                )]
+                                assert warehouse(['--config', str(path_a), '--orders', str(orders_path), *{options!r}]) == 1
+                                for guard in guards: guard.assert_not_called()
+                            assert events == ['config', 'orders', 'numeric'], events
+                            assert lines == list(range(1, {len(contents.splitlines())} + 1)), lines
+                            assert_values(returned[0])
+                            assert 'reason=pending_run_folder' in err.getvalue()
+                            assert 'pending_order_preflight' not in err.getvalue()
+                            assert 'pending_numeric_integration' not in err.getvalue()
+                            assert len(err.getvalue().splitlines()) == 1
+                            assert '[INFO]' not in out.getvalue() + err.getvalue()
+                            assert 'initialized' not in out.getvalue()
+                            assert bool(out.getvalue()) == ('T' in {options!r})
+                            assert before == {{p: p.read_bytes() if p.is_file() else None
+                                              for p in path_a.parent.rglob('*')}}
+                        """, reverse=reverse)
+
+    def test_real_order_failures_never_publish_constants_or_construct_outputs(self) -> None:
+        for case in ('missing', 'directory', 'grammar', 'utf8', 'late_utf8', 'open', 'read'):
+            for options in ([], ["--debug", "F"], ["--debug", "T"]):
+                with self.subTest(case=case, options=options):
+                    self.run_fresh(f"""
+                        orders = path_a.parent / {f'{case}-{options[-1] if options else "omitted"}.txt'!r}
+                        case = {case!r}
+                        contents = b'Order Model Blue\\nOrder missing'
+                        if case == 'directory': orders.mkdir()
+                        elif case != 'missing':
+                            if case == 'utf8': contents = b'\\xff'
+                            elif case == 'late_utf8': contents = b'Order Model Blue\\n' * 2000 + b'\\xff'
+                            elif case in ('open', 'read'): contents = b'Order Model Blue'
+                            orders.write_bytes(contents)
+                        before = {{p: p.read_bytes() if p.is_file() else None
+                                  for p in path_a.parent.rglob('*')}}
+                        real_open = io.open
+                        def fail_read(*args):
+                            raise OSError('order device failed')
+                        def open_file(path, *args, **kwargs):
+                            if Path(path) == orders:
+                                if case == 'open': raise PermissionError('order access denied')
+                                stream = io.BytesIO(contents)
+                                stream.read = fail_read
+                                return stream
+                            return real_open(path, *args, **kwargs)
+                        out, err = io.StringIO(), io.StringIO()
+                        with ExitStack() as stack:
+                            stack.enter_context(redirect_stdout(out))
+                            stack.enter_context(redirect_stderr(err))
+                            if case in ('open', 'read'):
+                                stack.enter_context(patch('io.open', open_file))
+                            guards = [stack.enter_context(patch(target)) for target in (
+                                'warehouse.launcher._initialize_numeric_constants',
+                                'warehouse.domain.warehouse_state.WarehouseState',
+                                'warehouse.file_io.output_writer.OutputWriter.create_output_directory',
+                                'warehouse.workflow.warehouse_application.WarehouseApplication.run',
+                                'os.chdir', 'os.mkdir',
+                            )]
+                            assert warehouse(['--config', str(path_a), '--orders', str(orders), *{options!r}]) == 1
+                            for guard in guards: guard.assert_not_called()
+                        assert_unpublished()
+                        assert 'reason=order_preflight_failed' in err.getvalue(), err.getvalue()
+                        assert str(orders) in err.getvalue()
+                        if case == 'grammar': assert 'line=2' in err.getvalue()
+                        if case == 'late_utf8': assert f'byte_offset={{len(contents)-1}}' in err.getvalue()
+                        assert len(err.getvalue().splitlines()) == 1, err.getvalue()
+                        assert '[INFO]' not in out.getvalue() + err.getvalue()
+                        assert 'action=validated path=' not in out.getvalue()
+                        assert before == {{p: p.read_bytes() if p.is_file() else None
+                                          for p in path_a.parent.rglob('*')}}
+                    """)
 
     def test_launcher_failure_boundary_preserves_real_partial_state_and_transport_failures(self) -> None:
-        # Inject the future coordination call after a REAL loader, solely to test
-        # failure handling. This is not proof of successful full order preflight.
+        # Preinitialize one owner to force a real post-preflight invariant failure.
         for failure in ("none", "write", "flush", "short", "closed", "unavailable"):
             with self.subTest(failure=failure):
                 self.run_fresh(f"""
                     failure = {failure!r}
                     alternate = ConfigLoader().load_config(path_b)
                     modules['warehouse.domain.truck'].initialize_truck_constants(alternate)
-                    real_load = ConfigLoader.load_config
-                    def load_then_initialize(loader, path):
-                        config = real_load(loader, path)
-                        _initialize_numeric_constants(config)
-                        raise AssertionError('initialization unexpectedly succeeded')
+                    orders = path_a.parent / 'orders.txt'
+                    orders.write_text('Order Model Blue', encoding='utf-8')
                     class ErrorStream(io.StringIO):
                         def write(self, text):
                             if failure == 'unavailable' or ('reason=startup_invariant_failed' in text):
@@ -398,13 +495,12 @@ class NumericInitializationTests(unittest.TestCase):
                         stack.enter_context(redirect_stdout(out))
                         stack.enter_context(redirect_stderr(err))
                         stack.enter_context(patch.object(logging, 'raiseExceptions', False))
-                        stack.enter_context(patch.object(ConfigLoader, 'load_config', load_then_initialize))
                         guards = [stack.enter_context(patch(target)) for target in (
                             'warehouse.domain.warehouse_state.WarehouseState',
                             'warehouse.file_io.output_writer.OutputWriter.create_output_directory',
                             'warehouse.workflow.warehouse_application.WarehouseApplication.run',
                         )]
-                        assert warehouse(['--config', str(path_a), '--orders', 'unvalidated.txt']) == 1
+                        assert warehouse(['--config', str(path_a), '--orders', str(orders)]) == 1
                         for guard in guards:
                             guard.assert_not_called()
                     state = _numeric_initialization_state()

@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
@@ -30,6 +31,8 @@ class ConfigurationLimitTests(unittest.TestCase):
         self.enterContext(isolated_console_logging())
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
         self.path, self.document = write_configuration(self.root / "Inputs")
+        self.orders = self.path.parent / "orders.txt"
+        self.orders.write_text("Order Model Blue", encoding="utf-8")
         self.limit = sys.get_int_max_str_digits()
 
     def write_large_values(self, digits: int) -> tuple[str, int]:
@@ -59,46 +62,58 @@ class ConfigurationLimitTests(unittest.TestCase):
     def test_all_numeric_classes_accept_exact_large_values_in_real_cli_modes(self) -> None:
         for digits in (4300, 4301, 5000):
             write_configuration(self.path.parent)
-            token, expected = self.write_large_values(digits)
+            self.write_large_values(digits)
             before = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
             for options in ([], ["--debug", "F"], ["--debug", "T"]):
-                with self.subTest(digits=digits, options=options):
+                code = textwrap.dedent(f"""
+                    import io, sys
+                    from contextlib import redirect_stdout, redirect_stderr
+                    from pathlib import Path
+                    from warehouse.configuration.config_loader import ConfigLoader, _read_json
+                    from warehouse.launcher import warehouse, _numeric_initialization_state
+                    path, orders = map(Path, sys.argv[1:3])
+                    expected = 10 ** {digits} - 1
+                    limit = sys.get_int_max_str_digits()
                     out, err = io.StringIO(), io.StringIO()
                     with redirect_stdout(out), redirect_stderr(err):
-                        result = warehouse(["--config", str(self.path), "--orders", "Unvalidated.TXT", *options])
-                        config = ConfigLoader().load_config(self.path)
-                        decoded = _read_json(self.path, str(self.path))
-                    self.assertEqual(result, 1)
-                    self.assertIn("configuration validated", err.getvalue())
-                    self.assertNotIn("configuration_failed", err.getvalue())
-                    self.assertNotIn("console_logging_failed", err.getvalue())
-                    for section in ("warehouse", "identifiers"):
-                        for field, original in self.document[section].items():
-                            if type(original) is int:
-                                actual = getattr(config, field)
-                                target = 9 * 10 ** (digits - 1) - 1 if field == "replenishment_threshold" else expected
-                                self.assertTrue(type(actual) is int and actual == target, field)
-                    self.assertTrue(decoded["extra"][0]["nested"][0] == expected)
-                    self.assertTrue(decoded["extra"][0]["nested"][1]["negative"] == -expected)
-                    self.assertEqual(tuple(config.location_map), ("002", "001", "4", "3"))
-                    self.assertEqual(config.catalog.resolve_skus("Model", "Blue"), ("001", "002"))
+                        result = warehouse(['--config', str(path), '--orders', str(orders), *{options!r}])
+                        config = ConfigLoader().load_config(path)
+                        decoded = _read_json(path, str(path))
+                    assert result == 1 and 'reason=pending_run_folder' in err.getvalue()
+                    assert 'configuration_failed' not in err.getvalue()
+                    assert 'console_logging_failed' not in err.getvalue()
+                    fields = {tuple(field for section in ('warehouse', 'identifiers') for field, value in self.document[section].items() if type(value) is int)!r}
+                    for field in fields:
+                        actual = getattr(config, field)
+                        target = 9 * 10 ** ({digits} - 1) - 1 if field == 'replenishment_threshold' else expected
+                        assert type(actual) is int and actual == target, field
+                    assert all(type(value) is int for value in _numeric_initialization_state().values())
+                    assert decoded['extra'][0]['nested'][0] == expected
+                    assert decoded['extra'][0]['nested'][1]['negative'] == -expected
+                    assert tuple(config.location_map) == ('002', '001', '4', '3')
+                    assert config.catalog.resolve_skus('Model', 'Blue') == ('001', '002')
                     for location in config.location_map.values():
-                        self.assertTrue(location.aisle == expected and location.rack == expected)
-                        self.assertTrue(location.level in (expected, expected - 1))
+                        assert location.aisle == expected and location.rack == expected
+                        assert location.level in (expected, expected - 1)
                     for location, stock in config.initial_stock.items():
-                        self.assertTrue(stock == expected)
-                        self.assertTrue(any(location is item for item in config.location_map.values()))
-                    if "T" in options:
-                        for evidence in ("function=config_loader.load_config action=entry",
-                                         "function=config_loader._read_json action=entry",
-                                         "function=config_loader._read_csv action=entry", "path="):
-                            self.assertIn(evidence, out.getvalue())
-                        for removed in ("action=returned", "token=", "settings=", "=n/a"):
-                            self.assertNotIn(removed, out.getvalue())
-                    else:
-                        self.assertEqual(out.getvalue(), "")
-                    self.assertNotIn("[INFO]", out.getvalue() + err.getvalue())
-                    self.assertEqual({path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}, before)
+                        assert stock == expected
+                        assert any(location is item for item in config.location_map.values())
+                    if 'T' in {options!r}:
+                        for evidence in ('function=config_loader.load_config action=entry',
+                                         'function=config_loader._read_json action=entry',
+                                         'function=config_loader._read_csv action=entry', 'path='):
+                            assert evidence in out.getvalue(), evidence
+                        for removed in ('action=returned', 'token=', 'settings=', '=n/a'):
+                            assert removed not in out.getvalue(), removed
+                    else: assert out.getvalue() == ''
+                    assert '[INFO]' not in out.getvalue() + err.getvalue()
+                    assert sys.get_int_max_str_digits() == limit
+                """)
+                with self.subTest(digits=digits, options=options):
+                    result = subprocess.run([sys.executable, '-c', code, str(self.path), str(self.orders)],
+                                            capture_output=True, text=True, check=False)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual({path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}, before)
                     self.assertEqual(sys.get_int_max_str_digits(), self.limit)
 
     def test_large_rejections_keep_full_observed_evidence_and_required_range(self) -> None:
@@ -208,23 +223,33 @@ class ConfigurationLimitTests(unittest.TestCase):
         self.assertEqual(sys.get_int_max_str_digits(), self.limit)
 
     def test_quoted_numeric_spellings_are_unchanged_and_suppressed_debug_is_lazy(self) -> None:
-        from warehouse.file_io.activity_log import _diagnostic_text
-
         spellings = ["9" * 5000, "+000_001", "NaN", "Infinity", "-Infinity"]
         self.document["extra"] = {"quoted": spellings}
         self.path.write_text(json.dumps(self.document), encoding="utf-8")
         self.assertEqual(_read_json(self.path, str(self.path))["extra"]["quoted"], spellings)
         self.write_large_values(5000)
-        def render(value: object, **kwargs: object) -> str:
-            if type(value) is int or isinstance(value, (dict, list, tuple)):
-                raise AssertionError("suppressed numeric DEBUG evidence was rendered")
-            return _diagnostic_text(value, **kwargs)
         for options in ([], ["--debug", "F"]):
-            with self.subTest(options=options), redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
-                with patch("warehouse.configuration.config_loader._diagnostic_text", side_effect=render):
-                    self.assertEqual(warehouse(["--config", str(self.path), "--orders", "Unvalidated.TXT", *options]), 1)
-            self.assertEqual(out.getvalue(), "")
-            self.assertIn("configuration validated", err.getvalue())
+            code = textwrap.dedent(f"""
+                import io, sys
+                from contextlib import redirect_stdout, redirect_stderr
+                from unittest.mock import patch
+                from warehouse.file_io.activity_log import _diagnostic_text
+                from warehouse.launcher import warehouse
+                def render(value, **kwargs):
+                    if type(value) is int or isinstance(value, (dict, list, tuple)):
+                        raise AssertionError('suppressed numeric DEBUG evidence was rendered')
+                    return _diagnostic_text(value, **kwargs)
+                out, err = io.StringIO(), io.StringIO()
+                with redirect_stdout(out), redirect_stderr(err):
+                    with patch('warehouse.configuration.config_loader._diagnostic_text', side_effect=render):
+                        assert warehouse(['--config', sys.argv[1], '--orders', sys.argv[2], *{options!r}]) == 1
+                assert out.getvalue() == ''
+                assert 'reason=pending_run_folder' in err.getvalue()
+            """)
+            with self.subTest(options=options):
+                result = subprocess.run([sys.executable, '-c', code, str(self.path), str(self.orders)],
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_warning_replacements_match_real_launch_directory_and_os_timezone(self) -> None:
         self.document["files"]["output_root"] = "Ignored Output"
@@ -248,10 +273,10 @@ class ConfigurationLimitTests(unittest.TestCase):
                         with self.subTest(zone=zone, directory=directory, supplied=supplied, options=options):
                             result = subprocess.run(
                                 [sys.executable, str(PROJECT_ROOT / "warehouse"), "--config", supplied,
-                                 "--orders", "Unvalidated.TXT", *options], cwd=directory,
+                                 "--orders", str(self.orders), *options], cwd=directory,
                                 env=environment, capture_output=True, text=True, check=False,
                             )
-                            self.assertIn("configuration validated", result.stderr)
+                            self.assertIn("reason=pending_run_folder", result.stderr)
                             self.assertEqual(result.returncode, 1)
                             warnings = [line for line in result.stderr.splitlines() if line.startswith("[WARNING]")]
                             self.assertEqual(len(warnings), 2)

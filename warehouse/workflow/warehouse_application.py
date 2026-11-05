@@ -84,7 +84,11 @@ class WarehouseApplication:
         ...
 
     def run(self, orders: Sequence[OrderLine]) -> None:
-        """Process full batches sequentially, close input and drain before publication."""
+        """Process full batches sequentially, close input and drain before publication.
+
+        The launcher retains OrderReader's complete tuple. Product acceptance
+        and full batches belong to the registry and this later execution path.
+        """
         ...
 
     def apply_command(self, command: Command) -> None:

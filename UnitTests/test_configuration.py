@@ -442,7 +442,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(self.load().employees[WorkerType.LOADER], (" Alice ",))
 
     def test_real_loading_and_rejection_precede_constants_state_orders_and_output(self) -> None:
-        for invalid in (None, "numeric", "duplicate", "NaN", "Infinity", "-Infinity",
+        for invalid in ("numeric", "duplicate", "NaN", "Infinity", "-Infinity",
                         "csv", "coverage", "role", "missing"):
             write_configuration(self.path.parent)
             if invalid == "numeric":
@@ -461,7 +461,7 @@ class ConfigurationTests(unittest.TestCase):
                 self.save(document)
             elif invalid == "missing":
                 (self.path.parent / "Products.CSV").unlink()
-            elif invalid is not None:
+            else:
                 self.path.write_text(json.dumps(self.document)[:-1] + ',"extra":[{"v":' + invalid + '}]}',
                                      encoding="utf-8")
             before = sorted(self.root.rglob("*"))
@@ -470,6 +470,7 @@ class ConfigurationTests(unittest.TestCase):
                 stdout = stack.enter_context(redirect_stdout(io.StringIO()))
                 stderr = stack.enter_context(redirect_stderr(io.StringIO()))
                 guards = [stack.enter_context(patch(target)) for target in (
+                    "warehouse.launcher._initialize_numeric_constants",
                     "warehouse.domain.warehouse_state.WarehouseState",
                     "warehouse.file_io.order_reader.OrderReader.read_orders",
                     "warehouse.file_io.output_writer.OutputWriter.create_output_directory",
@@ -482,8 +483,7 @@ class ConfigurationTests(unittest.TestCase):
                     guard.assert_not_called()
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertIn("result=INCOMPLETE", stderr.getvalue())
-                self.assertIn("configuration validated" if invalid is None else "reason=configuration_failed",
-                              stderr.getvalue())
+                self.assertIn("reason=configuration_failed", stderr.getvalue())
                 self.assertNotIn("console_logging_failed", stderr.getvalue())
             self.assertEqual(sorted(self.root.rglob("*")), before)
             self.assertEqual({path: path.read_bytes() for path in contents}, contents)
@@ -503,6 +503,8 @@ class ConfigurationTests(unittest.TestCase):
     def test_fresh_process_paths_and_independent_configurations_in_all_debug_modes(self) -> None:
         launch = self.root / "Other Launch"
         launch.mkdir()
+        orders = self.path.parent / "orders.txt"
+        orders.write_text("Order Model Blue\nOrder Unknown Purple", encoding="utf-8")
         before = sorted(self.root.rglob("*"))
         for absolute in (False, True):
             document = copy.deepcopy(self.document)
@@ -533,11 +535,11 @@ class ConfigurationTests(unittest.TestCase):
                         with self.subTest(absolute=absolute, directory=directory, supplied=supplied, debug=debug):
                             result = subprocess.run(
                                 [sys.executable, str(PROJECT_ROOT / "warehouse"), "--config", supplied,
-                                 "--orders", "Unvalidated.TXT", *debug], cwd=directory,
+                                 "--orders", str(orders), *debug], cwd=directory,
                                 capture_output=True, text=True, check=False,
                             )
                             self.assertEqual(result.returncode, 1, result.stderr)
-                            self.assertIn("configuration validated", result.stderr)
+                            self.assertIn("reason=pending_run_folder", result.stderr)
                             self.assertNotIn("[INFO]", result.stdout + result.stderr)
                             self.assertNotIn("default_stock", result.stdout)
                             if "T" in debug:
@@ -556,12 +558,23 @@ class ConfigurationTests(unittest.TestCase):
         self.document["warehouse"]["debug"] = "T"
         self.save()
         self.assertFalse(hasattr(self.load(), "debug"))
+        orders = self.path.parent / "orders.txt"
+        orders.write_text("Order Model Blue", encoding="utf-8")
         for options, expected in (([], logging.INFO), (["--debug", "F"], logging.INFO),
                                   (["--debug", "T"], logging.DEBUG)):
-            with self.subTest(options=options), redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()):
-                self.assertEqual(warehouse(["--config", str(self.path), "--orders", "Unvalidated.TXT", *options]), 1)
-                self.assertEqual(logging.getLogger("warehouse").level, expected)
-                self.assertEqual(bool(stdout.getvalue()), expected == logging.DEBUG)
+            code = (
+                "import io,logging,sys; from contextlib import redirect_stdout,redirect_stderr; "
+                "from warehouse.launcher import warehouse; out,err=io.StringIO(),io.StringIO(); "
+                "\nwith redirect_stdout(out),redirect_stderr(err): result=warehouse(sys.argv[1:])"
+                f"\nassert result==1; assert logging.getLogger('warehouse').level=={expected}; "
+                f"assert bool(out.getvalue())=={expected == logging.DEBUG}; "
+                "assert 'reason=pending_run_folder' in err.getvalue()"
+            )
+            with self.subTest(options=options):
+                result = subprocess.run([sys.executable, "-c", code, "--config", str(self.path),
+                                         "--orders", str(orders), *options],
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class ConfigurationImmutabilityTests(unittest.TestCase):
