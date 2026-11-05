@@ -513,6 +513,22 @@ class ConfigurationTests(unittest.TestCase):
             self.save(document)
             for directory in (self.root, launch):
                 for supplied in (os.path.relpath(self.path, directory), str(self.path)):
+                    verified = subprocess.run(
+                        [sys.executable, "-c",
+                         "import json,sys; from pathlib import Path; "
+                         "from warehouse.configuration.config_loader import ConfigLoader; "
+                         "c=ConfigLoader().load_config(Path(sys.argv[1])); "
+                         "print(json.dumps({'default_stock':c.default_stock,"
+                         "'paths':[str(c.translation_path),str(c.location_map_path),str(c.initial_inventory_path)]}))",
+                         supplied], cwd=directory,
+                        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+                        capture_output=True, text=True, check=False,
+                    )
+                    self.assertEqual(verified.returncode, 0, verified.stderr)
+                    self.assertEqual(json.loads(verified.stdout), {
+                        "default_stock": document["warehouse"]["default_stock"],
+                        "paths": [str(self.path.parent / filename) for filename in self.document["files"].values()],
+                    })
                     for debug in ([], ["--debug", "F"], ["--debug", "T"]):
                         with self.subTest(absolute=absolute, directory=directory, supplied=supplied, debug=debug):
                             result = subprocess.run(
@@ -523,9 +539,12 @@ class ConfigurationTests(unittest.TestCase):
                             self.assertEqual(result.returncode, 1, result.stderr)
                             self.assertIn("configuration validated", result.stderr)
                             self.assertNotIn("[INFO]", result.stdout + result.stderr)
-                            self.assertEqual("default_stock" in result.stdout, "T" in debug)
+                            self.assertNotIn("default_stock", result.stdout)
                             if "T" in debug:
-                                self.assertIn(f"'default_stock': {document['warehouse']['default_stock']}", result.stdout)
+                                assert_callable_traces(self, result.stdout, (
+                                    "launcher.warehouse", "config_loader.load_config",
+                                    "config_loader._read_json", "config_loader._read_csv",
+                                ))
                                 for filename in self.document["files"].values():
                                     self.assertIn(str(self.path.parent / filename), result.stdout)
                             else:
@@ -638,7 +657,8 @@ class ConfigurationDiagnosticTests(unittest.TestCase):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
         self.path, self.document = write_configuration(self.root / "Inputs")
 
-    def test_real_loader_qualified_traces_context_routing_and_no_duplicate_messages(self) -> None:
+
+    def test_real_loader_retains_file_entries_without_routine_traces_or_duplicate_messages(self) -> None:
         for level in (logging.INFO, logging.DEBUG):
             with self.subTest(level=level), redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
                 _configure_console_logging(level)
@@ -650,28 +670,21 @@ class ConfigurationDiagnosticTests(unittest.TestCase):
                     continue
                 output = out.getvalue()
                 assert_callable_traces(self, output, (
-                    "config_loader.load_config",
-                    "config_loader.__init__",
-                    *("config_loader." + name for name in (
-                        "_read_json", "_json_object", "_json_number", "_decimal_integer", "_required", "_section",
-                        "_resolve_reference", "_read_csv", "_sku", "_read_products", "_csv_integer",
-                        "_location", "_read_locations", "_read_stock", "_employees", "_settings")),
-                    "product_catalog.__init__",
-                    "product_catalog.resolve_skus",
-                    "location.__post_init__",
-                    "warehouse_config.__post_init__",
+                    "config_loader.load_config", "config_loader._read_json", "config_loader._read_csv",
                 ))
                 for evidence in (str(self.path), "Products.CSV", "Traversal.CSV", "Stock.CSV",
-                                 "line_number=2", "row_count=4", "supplied=", "resolved=", "value=43",
-                                 "request_id=n/a", "order_ids=n/a", "truck_id=n/a"):
+                                 "headers=", "supplied=", "resolved=", "path="):
                     self.assertIn(evidence, output)
-                for name in ("load_config", "_read_json", "_read_products", "_read_locations",
-                             "_read_stock", "_employees", "_settings"):
-                    for action in ("entry", "returned"):
-                        matching = [line for line in output.splitlines()
-                                    if line.startswith(f"[DEBUG] function=config_loader.{name} action={action} ")]
-                        self.assertEqual(len(matching), 1)
-                self.assertTrue(all(line.startswith("[DEBUG] ") for line in output.splitlines()))
+                lines = output.splitlines()
+                self.assertEqual(len(lines), 5)
+                self.assertEqual(len(lines), len(set(lines)))
+                for line in lines:
+                    self.assertTrue(line.startswith("[DEBUG] "))
+                    self.assertIn("action=entry", line)
+                    self.assertNotIn("=n/a", line)
+                    self.assertNotIn("row_count=", line)
+                    self.assertNotIn("line_number=", line)
+                self.assertEqual(sum("function=config_loader._read_csv " in line for line in lines), 3)
 
     def test_suppressed_loader_and_snapshot_debug_never_formats_evidence(self) -> None:
         class UnformattablePath(type(Path())):
@@ -691,35 +704,34 @@ class ConfigurationDiagnosticTests(unittest.TestCase):
         out.write.assert_not_called()
         out.flush.assert_not_called()
 
-    def test_decoder_logging_callback_valueerror_is_not_relabelled(self) -> None:
-        for phase, failure in (
-            ("_json_object", ValueError("decoder diagnostic transport failed")),
-            ("_json_number", ValueError("decoder diagnostic transport failed")),
-            ("_decimal_integer", ValueError("integer diagnostic transport failed")),
-            ("_decimal_integer", json.JSONDecodeError("integer syntax-shaped transport error", "{}", 0)),
-            ("_json_object", json.JSONDecodeError("transport supplied syntax-shaped error", "{}", 0)),
-        ):
-            captured, stderr = io.StringIO(), io.StringIO()
-            stream = Mock(wraps=captured)
-            def write(text: str) -> int:
-                if f"config_loader.{phase} " in text:
-                    raise failure
-                return captured.write(text)
-            stream.write.side_effect = write
-            with patch("sys.stdout", stream), redirect_stderr(stderr), patch.object(logging, "raiseExceptions", False):
-                _configure_console_logging(logging.DEBUG)
-                with self.assertRaises(ValueError) as caught:
-                    ConfigLoader().load_config(self.path)
-                self.assertIs(caught.exception, failure)
-                self.assertIsNone(failure.__cause__)
-                result = warehouse(["--config", str(self.path), "--orders", "Unvalidated.TXT", "--debug", "T"])
-                self.assertEqual(result, 1)
-            self.assertIn("reason=console_logging_failed", stderr.getvalue())
-            self.assertNotIn("reason=configuration_failed", stderr.getvalue())
-            self.assertNotIn("configuration validated", stderr.getvalue())
+
+    def test_retained_file_entry_transport_errors_are_not_relabelled_as_input_errors(self) -> None:
+        for phase in ("load_config", "_read_json", "_read_csv"):
+            for failure in (ValueError("file diagnostic failed"),
+                            OSError("file diagnostic failed"),
+                            json.JSONDecodeError("syntax-shaped transport failure", "{}", 0)):
+                with self.subTest(phase=phase, error_type=type(failure)):
+                    captured, stderr = io.StringIO(), io.StringIO()
+                    stream = Mock(wraps=captured)
+                    def write(text: str) -> int:
+                        if f"function=config_loader.{phase} action=entry " in text:
+                            raise failure
+                        return captured.write(text)
+                    stream.write.side_effect = write
+                    with patch("sys.stdout", stream), redirect_stderr(stderr), patch.object(logging, "raiseExceptions", False):
+                        _configure_console_logging(logging.DEBUG)
+                        with self.assertRaises(type(failure)) as caught:
+                            ConfigLoader().load_config(self.path)
+                        self.assertIs(caught.exception, failure)
+                        self.assertIsNone(failure.__cause__)
+                        self.assertTrue(failure.warehouse_logging_failure)
+                        self.assertEqual(warehouse(["--config", str(self.path), "--orders", "Unvalidated.TXT", "--debug", "T"]), 1)
+                    self.assertIn("reason=console_logging_failed", stderr.getvalue())
+                    self.assertNotIn("reason=configuration_failed", stderr.getvalue())
+                    self.assertNotIn("configuration validated", stderr.getvalue())
 
     def test_actual_loader_stream_write_flush_short_and_closed_failures_propagate(self) -> None:
-        for phase in ("config_loader._read_csv", "config_loader._read_json", "warehouse_config.__post_init__"):
+        for phase in ("config_loader._read_csv", "config_loader._read_json", "config_loader.load_config"):
             for operation in ("write", "flush", "short", "closed"):
                 with self.subTest(phase=phase, operation=operation):
                     captured = io.StringIO()

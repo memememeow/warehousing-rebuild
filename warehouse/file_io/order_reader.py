@@ -5,7 +5,7 @@ Parsing preserves arrival order, duplicates, display spelling and source line
 numbers; product acceptance remains the registry's responsibility. OrderLine
 stores source line number, model and colour in that order.
 
-Function entry/results, resolved paths, source lines and validated row counts
+File-read entry traces, resolved paths and useful rejection/source evidence
 use DEBUG under --debug T; fatal input problems use ERROR. Emit no INFO here.
 """
 

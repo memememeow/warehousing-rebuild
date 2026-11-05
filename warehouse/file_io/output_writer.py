@@ -5,7 +5,7 @@ Final contents come from canonical loaded trucks and a defensive inventory
 snapshot. Publication must stage all contents and clean failed final artifacts
 where possible while preserving the diagnostic trace.
 
-Function entry/results, chosen absolute paths, row counts and successful final
+Selected entry traces, chosen absolute paths, row counts and successful final
 publication use DEBUG under --debug T. Folder collisions use WARNING and I/O
 failures use ERROR; this owner emits no INFO command or completion records.
 """

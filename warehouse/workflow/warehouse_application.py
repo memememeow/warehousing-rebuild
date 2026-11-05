@@ -6,7 +6,7 @@ without duplicating business collections. Commands retain SKU evidence that
 the operational trace grammar omits.
 
 After each accepted operational command commits, delegate its sole INFO mirror
-and raw trace append to ActivityLog.record_command. Function entry/results,
+and raw trace append to ActivityLog.record_command. Selected entry traces,
 handoffs, lifecycle changes and completion details use DEBUG under --debug T;
 F or omission suppresses those details without changing commands or outputs.
 Buffer nested diagnostics until related in-memory updates complete. No debug

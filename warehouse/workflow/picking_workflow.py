@@ -5,7 +5,7 @@ scans reduce stock before progress advances, and marshalling requires every
 pick. Rework prepends the same request with fresh progress and no stock credit.
 Assignment tuples retain the request, route-ordered SKUs and completed count.
 
-Function entry/results, route and assignment details, expected/observed scans,
+Useful route and assignment decisions, expected/observed scans,
 progress and committed status changes use DEBUG under --debug T. Buffer nested
 inventory and picking diagnostics until the related commit completes; preserve
 WARNING/ERROR for problems. INFO commands belong to ActivityLog.record_command.

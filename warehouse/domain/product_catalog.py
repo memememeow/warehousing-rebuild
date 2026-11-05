@@ -4,9 +4,10 @@ Lookup keys use trimmed, case-folded product text while accepted orders retain
 their display spelling. Construction must reject normalized collisions and
 freeze a defensive copy so later input mutation cannot change the catalog.
 
-Constructor and lookup entry/results, normalized keys and resolved SKU pairs
-use DEBUG under --debug T. Unknown products retain recoverable rejection
-handling; this query owner emits no INFO and stores no debug-mode setting.
+Rejected products retain useful supplied/normalized keys and available SKU
+evidence at DEBUG under --debug T. Successful construction and lookup stay silent.
+Unknown products retain recoverable rejection handling; this query owner emits
+no INFO and stores no debug-mode setting.
 """
 
 from __future__ import annotations
@@ -30,10 +31,6 @@ class ProductCatalog:
         self, products: Mapping[tuple[str, str], tuple[str, str]]
     ) -> None:
         """Validate normalized product keys and retain a frozen defensive copy."""
-        logger.debug(
-            "function=product_catalog.__init__ action=entry products=%r",
-            products, extra={"row_count": len(products)},
-        )
         normalized_products: dict[tuple[str, str], tuple[str, str]] = {}
         for supplied_product, skus in products.items():
             normalized_product = _normalize_product(supplied_product, skus)
@@ -50,23 +47,10 @@ class ProductCatalog:
                 raise ValueError(reason)
             _validate_skus(supplied_product, normalized_product, skus)
             normalized_products[normalized_product] = (skus[0], skus[1])
-            logger.debug(
-                "function=product_catalog.__init__ "
-                "action=validated supplied_product=%r normalized_product=%r",
-                supplied_product, normalized_product, extra={"sku_evidence": skus},
-            )
         object.__setattr__(self, "products", MappingProxyType(normalized_products))
-        logger.debug(
-            "function=product_catalog.__init__ action=returned products=%r",
-            self.products, extra={"row_count": len(self.products)},
-        )
 
     def resolve_skus(self, model: str, colour: str) -> tuple[str, str]:
         """Resolve the fascia pair case-insensitively or raise ValueError."""
-        logger.debug(
-            "function=product_catalog.resolve_skus action=entry supplied_product=%r",
-            (model, colour),
-        )
         normalized_product = (model.strip().casefold(), colour.strip().casefold())
         if normalized_product not in self.products:
             logger.debug(
@@ -77,51 +61,30 @@ class ProductCatalog:
             raise ValueError(
                 f"Unknown product: supplied={(model, colour)!r}, normalized={normalized_product!r}"
             )
-        skus = self.products[normalized_product]
-        logger.debug(
-            "function=product_catalog.resolve_skus "
-            "action=returned supplied_product=%r normalized_product=%r",
-            (model, colour), normalized_product, extra={"sku_evidence": skus},
-        )
-        return skus
+        return self.products[normalized_product]
 
 
 def _normalize_product(
     product: tuple[str, str], skus: tuple[str, str]
 ) -> tuple[str, str]:
     """Validate a source key before trimming and case-folding its two parts."""
-    logger.debug(
-        "function=product_catalog._normalize_product action=entry supplied_product=%r",
-        product, extra={"sku_evidence": skus},
-    )
     if (not isinstance(product, tuple) or len(product) != 2
             or not all(isinstance(part, str) for part in product)):
         reason = f"Product key must be a model/colour string pair: {product!r}"
         logger.debug(
             "function=product_catalog._normalize_product action=rejected "
-            "supplied_product=%r normalized_product=n/a reason=%s",
+            "supplied_product=%r reason=%s",
             product, reason, extra={"sku_evidence": skus},
         )
         raise ValueError(reason)
     model, colour = product
-    normalized = (model.strip().casefold(), colour.strip().casefold())
-    logger.debug(
-        "function=product_catalog._normalize_product action=returned "
-        "supplied_product=%r normalized_product=%r",
-        product, normalized, extra={"sku_evidence": skus},
-    )
-    return normalized
+    return model.strip().casefold(), colour.strip().casefold()
 
 
 def _validate_skus(
     product: tuple[str, str], normalized_product: tuple[str, str], skus: tuple[str, str]
 ) -> None:
     """Require an unchanged front/back tuple of positive decimal SKU strings."""
-    logger.debug(
-        "function=product_catalog._validate_skus action=entry "
-        "supplied_product=%r normalized_product=%r",
-        product, normalized_product, extra={"sku_evidence": skus},
-    )
     if not isinstance(skus, tuple) or len(skus) != 2:
         reason = f"Product {product!r} requires a front/back SKU tuple: {skus!r}"
         logger.debug(
@@ -143,8 +106,3 @@ def _validate_skus(
                 product, normalized_product, reason, extra={"sku_evidence": skus},
             )
             raise ValueError(reason)
-    logger.debug(
-        "function=product_catalog._validate_skus action=returned "
-        "supplied_product=%r normalized_product=%r",
-        product, normalized_product, extra={"sku_evidence": skus},
-    )

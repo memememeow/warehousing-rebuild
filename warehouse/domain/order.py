@@ -4,17 +4,14 @@ The registry allocates identity after product and location validation. Each
 order preserves input model and colour spelling alongside resolved SKU strings,
 and the same object remains attached to its fulfillment request.
 
-Construction and accepted-order details use DEBUG under --debug T; the accepted
+Construction stays silent. Accepted-order events belong to the registry; the
 Order command's sole INFO mirror belongs to ActivityLog.record_command. The
 immutable order has no debug-mode field.
 """
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
-
-logger = logging.getLogger("warehouse")
 
 # TODO: Construct orders only after successful registry acceptance.
 
@@ -28,13 +25,3 @@ class Order:
     colour: str
     front_sku: str
     back_sku: str
-
-    def __post_init__(self) -> None:
-        """Trace generated construction without changing accepted order identity."""
-        for action in ("entry", "returned"):
-            logger.debug(
-                "function=order.__post_init__ action=%s "
-                "constructor=order.__init__ model=%s colour=%s",
-                action, self.model, self.colour,
-                extra={"order_ids": (self.id,), "sku_evidence": (self.front_sku, self.back_sku)},
-            )

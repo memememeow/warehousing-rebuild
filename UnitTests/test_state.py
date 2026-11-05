@@ -14,7 +14,7 @@ import logging
 import re
 import tempfile
 import unittest
-from collections import UserDict
+from collections import Counter, UserDict
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import FrozenInstanceError
 from enum import StrEnum
@@ -182,7 +182,7 @@ class ProductCatalogImmutabilityTests(unittest.TestCase):
 class ConstructorDiagnosticTests(unittest.TestCase):
     """Exercise generated construction without implementing later owner behavior."""
 
-    def test_generated_constructors_trace_values_only_when_debug_enabled(self) -> None:
+    def test_constructors_preserve_identity_and_immutability_without_routine_logs(self) -> None:
         self.enterContext(isolated_console_logging())
         for threshold in (logging.INFO, logging.DEBUG):
             with (
@@ -219,105 +219,86 @@ class ConstructorDiagnosticTests(unittest.TestCase):
                     with self.assertRaises(FrozenInstanceError):
                         setattr(value, field, "changed")
                 self.assertEqual(stderr.getvalue(), "")
-                if threshold == logging.INFO:
-                    self.assertEqual(stdout.getvalue(), "")
-                    continue
-                assert_callable_traces(self, stdout.getvalue(), (
-                    "location.__post_init__",
-                    "order.__post_init__",
-                    "route_planner.__post_init__",
-                    "warehouse_config.__post_init__",
-                    "product_catalog.__init__",
-                    "product_catalog.resolve_skus",
-                ))
-                for evidence in (
-                    "order_ids=('O0001',)", "sku_evidence=('1', '2')", "row_count=2",
-                    "Translation.CSV", "Traversal.CSV", "Stock.CSV", "default_stock",
-                ):
-                    self.assertIn(evidence, stdout.getvalue())
+                self.assertEqual(stdout.getvalue(), "")
 
-    def test_implemented_callable_inventory_covers_retained_events_and_silent_numeric_paths(self) -> None:
-        self.enterContext(isolated_console_logging())
-        with redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()):
-            _configure_console_logging(logging.DEBUG)
-            location = Location("A", 0, 0, 0)
-            Order("O0001", "Model", "Blue", "1", "2")
-            RoutePlanner({"1": location})
-            catalog = ProductCatalog({("Model", "Blue"): ("1", "2")})
-            catalog.resolve_skus("model", "blue")
-            WarehouseConfig(
-                Path("Translation.CSV"), Path("Traversal.CSV"), Path("Stock.CSV"),
-                catalog, {"1": location}, {}, {}, 30, 5, 4, 4, 5,
-                4, 3, 3, 1, 1, 1, "%Y%m%d%H%M",
-            )
-            log = ActivityLog(Path("unused-run"), stdout)
-            log.mark_incomplete("fixture", {})
-            with tempfile.TemporaryDirectory() as temporary:
-                config_path, _ = write_configuration(Path(temporary).resolve() / "Inputs")
-                warehouse([
-                    "--config", str(config_path), "--orders", "Orders.TXT", "--debug", "T"
-                ])
-        traced = set(re.findall(r"\[DEBUG\] function=(\S+) action=entry", stdout.getvalue()))
-        assert_callable_traces(self, stdout.getvalue(), tuple(sorted(traced)))
-        # Emit/format/filter/fallback functions cannot recursively trace transport.
-        transport = {
-            "warehouse.launcher._CheckedStreamHandler.emit",
-            "warehouse.launcher._below_warning",
-            "warehouse.launcher._warning_or_higher",
-            "warehouse.launcher._report_logging_failure",
-            "warehouse.file_io.activity_log._context_fields",
-            "warehouse.file_io.activity_log._format_context",
-            # Recursive value rendering is part of formatting transport; tracing
-            # it through the handler would recursively render its own arguments.
-            "warehouse.file_io.activity_log._diagnostic_text",
-            "warehouse.file_io.activity_log.ActivityLog.feedback",
-        }
-        # The current rules prohibit success/entry/return logs for numeric
-        # initialization. These exact callables are exercised in fresh processes
-        # by test_numeric_initialization; none represents a retained DEBUG event.
-        silent_numeric = {
-            "warehouse.workflow.inventory.initialize_inventory_constants",
-            "warehouse.workflow.inventory.__getattr__",
-            "warehouse.workflow.order_registry.initialize_order_constants",
-            "warehouse.workflow.order_registry.__getattr__",
-            "warehouse.workflow.sequencing_workflow.initialize_sequencing_constants",
-            "warehouse.workflow.sequencing_workflow.__getattr__",
-            "warehouse.domain.truck.initialize_truck_constants",
-            "warehouse.domain.truck.__getattr__",
-            "warehouse.domain.truck.Truck.capacity_requests",
-            "warehouse.workflow.loading_workflow.initialize_loading_constants",
-            "warehouse.workflow.loading_workflow.__getattr__",
-            "warehouse.launcher._initialize_numeric_constants",
-            "warehouse.launcher._numeric_initialization_state",
-        }
-        implemented: dict[str, str] = {}
+
+    def test_retained_debug_event_inventory_matches_sources_context_and_individual_emissions(self) -> None:
+        # Count source sites, including the two distinct SKU rejection branches.
+        expected = Counter({
+            ("warehouse.launcher.warehouse", "launcher.warehouse", "entry"): 1,
+            ("warehouse.configuration.config_loader.ConfigLoader.load_config", "config_loader.load_config", "entry"): 1,
+            ("warehouse.configuration.config_loader._read_json", "config_loader._read_json", "entry"): 1,
+            ("warehouse.configuration.config_loader._read_csv", "config_loader._read_csv", "entry"): 1,
+            ("warehouse.domain.product_catalog.ProductCatalog.__init__", "product_catalog.__init__", "rejected"): 1,
+            ("warehouse.domain.product_catalog.ProductCatalog.resolve_skus", "product_catalog.resolve_skus", "rejected"): 1,
+            ("warehouse.domain.product_catalog._normalize_product", "product_catalog._normalize_product", "rejected"): 1,
+            ("warehouse.domain.product_catalog._validate_skus", "product_catalog._validate_skus", "rejected"): 2,
+        })
         root = Path(__file__).resolve().parent.parent
+        observed = Counter()
         for path in (root / "warehouse").rglob("*.py"):
             module = ".".join(path.relative_to(root).with_suffix("").parts)
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for owner in (tree, *(node for node in tree.body if isinstance(node, ast.ClassDef))):
-                for node in owner.body:
-                    if not isinstance(node, ast.FunctionDef):
-                        continue
-                    body = node.body
-                    if ast.get_docstring(node) is not None:
-                        body = body[1:]
-                    if all(
-                        isinstance(statement, ast.Pass)
-                        or isinstance(statement, ast.Expr)
-                        and isinstance(statement.value, ast.Constant)
-                        and statement.value.value is Ellipsis
-                        for statement in body
-                    ):
+                for function in owner.body:
+                    if not isinstance(function, ast.FunctionDef):
                         continue
                     prefix = f"{owner.name}." if isinstance(owner, ast.ClassDef) else ""
-                    implemented[f"{module}.{prefix}{node.name}"] = f"{path.stem}.{node.name}"
-        # Keep full identities in the inventory and require unambiguous short labels.
-        self.assertEqual(len(implemented), len(set(implemented.values())))
-        transport_labels = {implemented[function] for function in transport}
-        numeric_labels = {implemented[function] for function in silent_numeric}
-        self.assertEqual(set(implemented.values()), traced | transport_labels | numeric_labels)
-        self.assertTrue(traced.isdisjoint(transport_labels | numeric_labels))
+                    identity = f"{module}.{prefix}{function.name}"
+                    for call in ast.walk(function):
+                        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute):
+                            continue
+                        if not isinstance(call.func.value, ast.Name) or call.func.value.id != "logger" or call.func.attr != "debug":
+                            continue
+                        self.assertIsInstance(call.args[0], ast.Constant, identity)
+                        match = re.match(r"function=(\S+) action=(\S+)", call.args[0].value)
+                        self.assertIsNotNone(match, identity)
+                        observed[(identity, *match.groups())] += 1
+        self.assertEqual(observed, expected)
+        labels = {identity: label for identity, label, action in expected}
+        self.assertEqual(len(labels), len(set(labels.values())))
+        self.enterContext(isolated_console_logging())
+        with redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()):
+            with tempfile.TemporaryDirectory() as temporary:
+                config_path, _ = write_configuration(Path(temporary).resolve() / "Inputs")
+                self.assertEqual(warehouse([
+                    "--config", str(config_path), "--orders", "Orders.TXT", "--debug", "T",
+                ]), 1)
+            catalog = ProductCatalog({("Model", "Blue"): ("1", "2")})
+            with self.assertRaises(ValueError):
+                catalog.resolve_skus("Unknown", "Blue")
+            for products in (
+                {"AB": ("1", "2")},
+                {("Model", "Blue"): ["1", "2"]},
+                {("Model", "Blue"): ("1", "0")},
+                {("Model", "Blue"): ("1", "2"), (" MODEL ", " BLUE "): ("3", "4")},
+            ):
+                with self.assertRaises(ValueError):
+                    ProductCatalog(products)
+        lines = stdout.getvalue().splitlines()
+        self.assertEqual(len(lines), len(set(lines)))
+        emitted = Counter()
+        contexts = {
+            "launcher.warehouse": ("config_supplied=", "orders_supplied=", "console_level=DEBUG"),
+            "config_loader.load_config": ("supplied=", "source=", "path="),
+            "config_loader._read_json": ("source=", "path="),
+            "config_loader._read_csv": ("headers=", "source=", "path="),
+            "product_catalog.__init__": ("supplied_product=", "normalized_product=", "sku_evidence=", "reason="),
+            "product_catalog.resolve_skus": ("supplied_product=", "normalized_product=", "reason=unknown_product"),
+            "product_catalog._normalize_product": ("supplied_product=", "sku_evidence=", "reason="),
+            "product_catalog._validate_skus": ("supplied_product=", "normalized_product=", "sku_evidence=", "reason="),
+        }
+        for line in lines:
+            match = re.match(r"\[DEBUG\] function=(\S+) action=(\S+) ", line)
+            self.assertIsNotNone(match, line)
+            label, action = match.groups()
+            emitted[label, action] += 1
+            self.assertNotIn("=n/a", line)
+            for evidence in contexts[label]:
+                self.assertIn(evidence, line)
+        expected_emissions = Counter({(label, action): count for (identity, label, action), count in expected.items()})
+        expected_emissions["config_loader._read_csv", "entry"] = 3
+        self.assertEqual(emitted, expected_emissions)
 
     def test_logging_ownership_and_debug_option_stay_at_the_launcher_boundary(self) -> None:
         root = Path(__file__).resolve().parent.parent

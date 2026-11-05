@@ -351,7 +351,8 @@ class LauncherTests(unittest.TestCase):
                                 self.assertTrue(all(line.startswith("[DEBUG] ") for line in lines))
                                 assert_callable_traces(self, result.stdout, (
                                     "launcher.warehouse",
-                                    "launcher._parse_arguments",
+                                    "config_loader.load_config",
+                                    "config_loader._read_json",
                                 ))
                             else:
                                 self.assertEqual(result.stdout, "")

@@ -8,6 +8,10 @@ the trace retains canonical tokens and exact arity. Feedback accepts only
 DEBUG, WARNING and ERROR; debug mode T enables all DEBUG details, while F or
 omission suppresses them. Checked INFO mirrors remain identical in both modes.
 Enabled DEBUG and INFO use stdout; WARNING/ERROR use stderr without duplicates.
+DEBUG includes available context only; WARNING/ERROR retain required unavailable
+fields as n/a. The handler appends one newline per record. Function-call traces
+are entry-only at selected startup/file-read boundaries; this transport stays
+silent on success and reports INCOMPLETE once at ERROR.
 Transport failures stop further commands; logging observes completed commits
 without recursively tracing its own emit/format functions.
 """
@@ -33,8 +37,15 @@ DIAGNOSTIC_FIELDS: Final[tuple[str, ...]] = (
 )
 
 
-def _context_fields(context: Mapping[str, object]) -> dict[str, object]:
-    """Fill unavailable diagnostic fields without mutating the caller's evidence."""
+def _context_fields(
+    context: Mapping[str, object], level: int = logging.ERROR,
+) -> dict[str, object]:
+    """Omit unavailable DEBUG evidence; retain failure placeholders and caller data."""
+    if level < logging.WARNING:
+        return {
+            name: value for name, value in context.items()
+            if value is not None and not (isinstance(value, str) and value == "n/a")
+        }
     fields: dict[str, object] = dict.fromkeys(DIAGNOSTIC_FIELDS, "n/a")
     fields.update({name: value if value is not None else "n/a" for name, value in context.items()})
     return fields
@@ -92,16 +103,8 @@ class ActivityLog:
 
     def __init__(self, run_directory: Path, console: TextIO) -> None:
         """Retain the run destination and checked stream used for command mirrors."""
-        logger.debug(
-            "function=activity_log.__init__ action=entry",
-            extra={"run_directory": run_directory},
-        )
         self.run_directory = run_directory
         self.console = console
-        self.feedback(
-            "DEBUG", "activity_log.__init__",
-            "action=returned", {},
-        )
 
     def record_command(self, command: Command, context: Mapping[str, object]) -> None:
         """Serialize once; flush [INFO] plus the command before its raw trace append.
@@ -131,28 +134,21 @@ class ActivityLog:
             raise ValueError("feedback level must be DEBUG, WARNING or ERROR; INFO is reserved")
         severity = getattr(logging, level)
         if logger.isEnabledFor(severity):
-            fields = _context_fields({"run_directory": self.run_directory, **context})
+            fields = _context_fields({"run_directory": self.run_directory, **context}, severity)
+            details = _format_context({
+                name: value for name, value in fields.items()
+                if name not in DIAGNOSTIC_FIELDS
+            })
             logger.log(
-                severity, "function=%s %s %s", function, message,
-                _format_context({
-                    name: value for name, value in fields.items()
-                    if name not in DIAGNOSTIC_FIELDS
-                }),
-                extra={name: fields[name] for name in DIAGNOSTIC_FIELDS},
+                severity, "function=%s %s", function,
+                " ".join(part for part in (message, details) if part),
+                extra={name: value for name, value in fields.items() if name in DIAGNOSTIC_FIELDS},
             )
 
     def mark_incomplete(self, reason: str, context: Mapping[str, object]) -> None:
         """Report INCOMPLETE at ERROR with the last confirmed trace context."""
         self.feedback(
-            "DEBUG", "activity_log.mark_incomplete",
-            f"action=entry reason={reason!r}", context,
-        )
-        self.feedback(
             "ERROR", "activity_log.mark_incomplete",
             f"action=aborted result=INCOMPLETE reason={reason!r}",
             {"last_confirmed_trace_line": "n/a", **context},
-        )
-        self.feedback(
-            "DEBUG", "activity_log.mark_incomplete",
-            f"action=returned result=INCOMPLETE reason={reason!r}", context,
         )

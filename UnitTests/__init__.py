@@ -20,16 +20,17 @@ from contextlib import contextmanager
 def assert_callable_traces(
     case: unittest.TestCase, output: str, callables: tuple[str, ...]
 ) -> None:
-    """Require file/function entry/results without fixing the DEBUG record count."""
+    """Check selected entry traces and reject return/exit tracing everywhere."""
     lines = output.splitlines()
+    case.assertNotIn("action=returned", output)
+    case.assertNotIn("action=exit", output)
     for function in callables:
-        for action in ("entry", "returned"):
-            with case.subTest(function=function, action=action):
-                matching = [
-                    line for line in lines
-                    if line.startswith(f"[DEBUG] function={function} action={action} ")
-                ]
-                case.assertTrue(matching, f"Missing {function} {action}:\n{output}")
+        with case.subTest(function=function):
+            matching = [
+                line for line in lines
+                if line.startswith(f"[DEBUG] function={function} action=entry ")
+            ]
+            case.assertTrue(matching, f"Missing {function} entry:\n{output}")
 
 
 @contextmanager

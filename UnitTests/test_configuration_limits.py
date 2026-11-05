@@ -19,6 +19,7 @@ from unittest.mock import Mock, patch
 from UnitTests import isolated_console_logging
 from UnitTests.test_configuration import PROJECT_ROOT, write_configuration
 from warehouse.configuration.config_loader import ConfigLoader, _read_json
+from warehouse.file_io.activity_log import ActivityLog
 from warehouse.domain.location import Location
 from warehouse.routing.route_planner import RoutePlanner
 from warehouse.launcher import _configure_console_logging, warehouse
@@ -88,10 +89,12 @@ class ConfigurationLimitTests(unittest.TestCase):
                         self.assertTrue(stock == expected)
                         self.assertTrue(any(location is item for item in config.location_map.values()))
                     if "T" in options:
-                        for evidence in ("value=" + token, "'default_stock': " + token,
-                                         "'nested': [" + token, "aisle=" + token,
-                                         "stock=", "warehouse_config.__post_init__ action=returned"):
+                        for evidence in ("function=config_loader.load_config action=entry",
+                                         "function=config_loader._read_json action=entry",
+                                         "function=config_loader._read_csv action=entry", "path="):
                             self.assertIn(evidence, out.getvalue())
+                        for removed in ("action=returned", "token=", "settings=", "=n/a"):
+                            self.assertNotIn(removed, out.getvalue())
                     else:
                         self.assertEqual(out.getvalue(), "")
                     self.assertNotIn("[INFO]", out.getvalue() + err.getvalue())
@@ -152,8 +155,9 @@ class ConfigurationLimitTests(unittest.TestCase):
             self.assertIn("value={'nested': [" + token + "]}", err.getvalue())
             self.assertIn("-" + token, str(caught.exception))
             if "T" in options:
-                self.assertIn("route_planner.__post_init__ action=returned", out.getvalue())
-                self.assertIn("aisle=" + token, out.getvalue())
+                self.assertNotIn("function=route_planner.", out.getvalue())
+                self.assertNotIn("function=location.", out.getvalue())
+                self.assertIn("function=config_loader._read_csv action=entry", out.getvalue())
         stock_path = self.path.parent / "Stock.CSV"
         stock_path.write_text("zone,aisle,rack,level,stock\nNorth," + token + ",0,0,1\n", encoding="utf-8")
         with self.assertRaises(ValueError) as caught:
@@ -161,20 +165,17 @@ class ConfigurationLimitTests(unittest.TestCase):
         for context in ("Stock.CSV", "line=2", "unknown initial-stock location", "aisle=" + token):
             self.assertIn(context, str(caught.exception))
 
-    def test_large_debug_logging_callbacks_keep_type_identity_and_provenance(self) -> None:
+
+    def test_retained_file_entries_keep_transport_error_identity_with_large_inputs(self) -> None:
         self.write_large_values(5000)
-        for phase, field in (("_decimal_integer action=returned", ""),
-                             ("_decimal_integer action=returned", "field=stock"),
-                             ("_json_object action=entry", ""),
-                             ("location.__post_init__ action=returned", ""),
-                             ("warehouse_config.__post_init__ action=returned", "")):
-            for failure in (ValueError("large diagnostic failed"), OSError("large diagnostic failed"),
+        for phase in ("config_loader.load_config", "config_loader._read_json", "config_loader._read_csv"):
+            for failure in (ValueError("file diagnostic failed"), OSError("file diagnostic failed"),
                             json.JSONDecodeError("syntax-shaped diagnostic failure", "{}", 0)):
-                with self.subTest(phase=phase, field=field, error_type=type(failure)):
+                with self.subTest(phase=phase, error_type=type(failure)):
                     captured, stderr = io.StringIO(), io.StringIO()
                     stream = Mock(wraps=captured)
                     def write(text: str) -> int:
-                        if phase in text and field in text:
+                        if f"function={phase} action=entry " in text:
                             raise failure
                         return captured.write(text)
                     stream.write.side_effect = write
@@ -188,6 +189,23 @@ class ConfigurationLimitTests(unittest.TestCase):
                         self.assertEqual(warehouse(["--config", str(self.path), "--orders", "Unvalidated.TXT", "--debug", "T"]), 1)
                     self.assertIn("console_logging_failed", stderr.getvalue())
                     self.assertNotIn("configuration_failed", stderr.getvalue())
+
+    def test_enabled_diagnostic_context_keeps_full_large_numbers_without_changing_conversion_limit(self) -> None:
+        token = "9" * 5000
+        number = 10 ** 5000 - 1
+        with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+            _configure_console_logging(logging.DEBUG)
+            log = ActivityLog(self.root, out)
+            log.feedback("DEBUG", "inventory.decrement_stock", "action=rejected",
+                         {"stock_before": number, "stock_after": -number})
+            log.feedback("ERROR", "inventory.decrement_stock", "action=aborted",
+                         {"stock_before": number, "stock_after": -number})
+        for output in (out.getvalue(), err.getvalue()):
+            self.assertIn("stock_before=" + token, output)
+            self.assertIn("stock_after=-" + token, output)
+        self.assertNotIn("=n/a", out.getvalue())
+        self.assertIn("request_id=n/a", err.getvalue())
+        self.assertEqual(sys.get_int_max_str_digits(), self.limit)
 
     def test_quoted_numeric_spellings_are_unchanged_and_suppressed_debug_is_lazy(self) -> None:
         from warehouse.file_io.activity_log import _diagnostic_text

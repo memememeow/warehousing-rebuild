@@ -35,7 +35,7 @@ from warehouse.configuration.config_loader import ConfigLoader
 from warehouse.configuration.warehouse_config import WarehouseConfig
 from warehouse.domain import truck
 from warehouse.file_io.activity_log import (
-    DIAGNOSTIC_FIELDS, _context_fields, _diagnostic_text, _format_context,
+    DIAGNOSTIC_FIELDS, _context_fields, _format_context,
 )
 from warehouse.workflow import inventory, loading_workflow, order_registry, sequencing_workflow
 
@@ -75,10 +75,12 @@ class _CheckedStreamHandler(logging.StreamHandler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             record = copy(record)
-            for field in DIAGNOSTIC_FIELDS:
-                if field in record.__dict__:
-                    record.__dict__[field] = _diagnostic_text(record.__dict__[field])
-            text = self.format(record) + self.terminator
+            fields = _context_fields({
+                field: record.__dict__[field] for field in DIAGNOSTIC_FIELDS
+                if field in record.__dict__
+            }, record.levelno)
+            context = _format_context(fields) if record.levelno != logging.INFO else ""
+            text = self.format(record) + (f" {context}" if context else "") + self.terminator
             if self.stream.write(text) != len(text):
                 raise OSError("console stream did not write the complete diagnostic")
             self.flush()
@@ -99,11 +101,7 @@ def _warning_or_higher(record: logging.LogRecord) -> bool:
 
 def _configure_console_logging(console_level: int) -> None:
     """Replace this application's console setup without altering root logging."""
-    formatter = logging.Formatter(
-        "[%(levelname)s] %(message)s "
-        + " ".join(f"{field}=%({field})s" for field in DIAGNOSTIC_FIELDS),
-        defaults=_context_fields({}),
-    )
+    formatter = logging.Formatter("[%(levelname)s] %(message)s")
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
         handler.close()
@@ -119,13 +117,6 @@ def _configure_console_logging(console_level: int) -> None:
     logger.setLevel(console_level)
     logger.disabled = False
     logger.propagate = False
-    # Replay setup entry/results only after both destinations are configured.
-    for action in ("entry", "returned"):
-        logger.debug(
-            "function=launcher._configure_console_logging action=%s "
-            "console_level=%s handler_count=%s propagate=%s",
-            action, logging.getLevelName(console_level), len(logger.handlers), logger.propagate,
-        )
 
 
 def _report_logging_failure(
@@ -196,27 +187,18 @@ def warehouse(argv: Sequence[str]) -> int:
     # TODO (step 08): Create the unique run folder before simulation.
     # TODO (steps 11, 20-23): Construct state/dependencies, run and publish results.
     try:
+        # Parsing and transport setup stay silent; help must stop before startup.
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "function=launcher.warehouse action=entry %s",
+                _format_context(_context_fields(context, logging.DEBUG)),
+            )
         working_directory = Path.cwd()
         context["working_directory"] = working_directory
         config_path = (working_directory / arguments.config).resolve()
         context["config_resolved"] = config_path
         orders_path = (working_directory / arguments.orders).resolve()
         context["orders_resolved"] = orders_path
-        # Report startup entry/results only after successful parsing permits setup.
-        # Help and argument errors must never configure logging or emit diagnostics.
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "function=launcher.warehouse action=entry %s",
-                _format_context(context),
-            )
-            logger.debug(
-                "function=launcher._parse_arguments action=entry %s",
-                _format_context(context),
-            )
-            logger.debug(
-                "function=launcher._parse_arguments action=returned %s",
-                _format_context(context),
-            )
         config = ConfigLoader(working_directory).load_config(config_path)
     except (OSError, ValueError, RuntimeError) as error:
         context["numeric_initialization"] = _numeric_initialization_state()
@@ -245,11 +227,6 @@ def warehouse(argv: Sequence[str]) -> int:
             arguments.config, str(config_path), arguments.orders, str(orders_path),
             _format_context(context),
         )
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "function=launcher.warehouse action=returned exit_code=1 "
-                "validated_locations=%s %s", len(config.location_map), _format_context(context),
-            )
     except (OSError, ValueError) as error:
         _report_logging_failure(error, context)
     return 1
