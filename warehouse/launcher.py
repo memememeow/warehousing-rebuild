@@ -18,7 +18,8 @@ Omitting --debug or supplying --debug F suppresses DEBUG details only.
 Planned usage command: python3.15 warehouse --help
 CONFIG and ORDERS are argument placeholders. CLI parsing, path resolution,
 console logging, complete configuration/order preflight and numeric owner
-initialization are implemented. Output setup and simulation remain deferred.
+initialization and exclusive run-folder creation are implemented. State,
+application execution, operational trace and final publication remain deferred.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import logging
 import sys
 from collections.abc import Mapping, Sequence
 from copy import copy
+from datetime import datetime
 from pathlib import Path
 
 from warehouse.configuration.config_loader import ConfigLoader
@@ -37,6 +39,7 @@ from warehouse.file_io.activity_log import (
     DIAGNOSTIC_FIELDS, _context_fields, _format_context,
 )
 from warehouse.file_io.order_reader import OrderReader
+from warehouse.file_io.output_writer import OutputWriter
 from warehouse.workflow import inventory, loading_workflow, order_registry, sequencing_workflow
 
 logger = logging.getLogger("warehouse")
@@ -162,7 +165,7 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
 
 
 def warehouse(argv: Sequence[str]) -> int:
-    """Complete configuration/order preflight and initialize numeric owners once.
+    """Preflight inputs, initialize numeric owners once and create the run folder.
 
     Configure logging before preflight and numeric initialization.
     Preserve checked INFO command mirrors in both modes and use direct stderr
@@ -182,7 +185,6 @@ def warehouse(argv: Sequence[str]) -> int:
     except (OSError, ValueError) as error:
         _report_logging_failure(error, context)
         return 1
-    # TODO (step 08): Create the unique run folder before simulation.
     # TODO (steps 11, 20-23): Construct state/dependencies, run and publish results.
     failure_reason = "configuration_failed"
     try:
@@ -194,6 +196,7 @@ def warehouse(argv: Sequence[str]) -> int:
             )
         working_directory = Path.cwd()
         context["working_directory"] = working_directory
+        started_at = datetime.now().astimezone()
         config_path = (working_directory / arguments.config).resolve()
         context["config_resolved"] = config_path
         orders_path = (working_directory / arguments.orders).resolve()
@@ -202,7 +205,15 @@ def warehouse(argv: Sequence[str]) -> int:
         failure_reason = "order_preflight_failed"
         orders = OrderReader().read_orders(orders_path)
         _initialize_numeric_constants(config)
+        failure_reason = "run_folder_failed"
+        files = OutputWriter()
+        output_directory = files.create_output_directory(working_directory, started_at)
+        context["run_directory"] = output_directory
     except (OSError, ValueError, RuntimeError) as error:
+        if hasattr(error, "warehouse_run_directory"):
+            context["run_directory"] = error.warehouse_run_directory
+        elif hasattr(error, "warehouse_output_path"):
+            context["path"] = error.warehouse_output_path
         context["numeric_initialization"] = _numeric_initialization_state()
         if getattr(error, "warehouse_logging_failure", False):
             _report_logging_failure(error, context)
@@ -211,6 +222,7 @@ def warehouse(argv: Sequence[str]) -> int:
             reason = "startup_invariant_failed" if isinstance(error, RuntimeError) else failure_reason
             failure_context = {key: value for key, value in context.items() if key not in (
                 "argv", "config_supplied", "config_resolved", "orders_supplied", "orders_resolved",
+                *DIAGNOSTIC_FIELDS,
             )}
             logger.error(
                 "function=launcher.warehouse action=aborted result=INCOMPLETE "
@@ -218,20 +230,27 @@ def warehouse(argv: Sequence[str]) -> int:
                 "orders supplied=%r resolved=%r; last_confirmed_trace_line=n/a %s",
                 reason, str(error), arguments.config, str(context["config_resolved"]),
                 arguments.orders, str(context["orders_resolved"]), _format_context(failure_context),
+                extra={key: context[key] for key in DIAGNOSTIC_FIELDS if key in context},
             )
         except (OSError, ValueError) as transport_error:
-            _report_logging_failure(transport_error, context)
+            _report_logging_failure(transport_error, {
+                **context, "startup_failure": reason, "startup_error": error,
+            })
         return 1
     try:
-        # Retain the validated tuple for WarehouseApplication.run in Step 20.
+        # Retain orders for run (20), files/output_directory for application
+        # construction (20), and the selected destination for ActivityLog (21).
+        # started_at remains the aware run-start evidence; later request times
+        # must be captured freshly. State construction belongs to Step 11.
         logger.error(
             "function=launcher.warehouse action=aborted "
             "configuration validated; complete order preflight and numeric initialization validated; "
             "simulation startup is not implemented; "
-            "reason=pending_run_folder deferred_steps=08-23 order_count=%d; "
+            "reason=pending_simulation deferred_steps=09-23 order_count=%d; "
             "config supplied=%r, resolved=%r; orders supplied=%r, resolved=%r "
             "result=INCOMPLETE last_confirmed_trace_line=n/a",
             len(orders), arguments.config, str(config_path), arguments.orders, str(orders_path),
+            extra={"run_directory": output_directory},
         )
     except (OSError, ValueError) as error:
         _report_logging_failure(error, context)

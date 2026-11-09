@@ -296,7 +296,7 @@ class LauncherTests(unittest.TestCase):
             orders = launch_directory / "Orders.TXT"
             orders.write_text("Order Model Blue", encoding="utf-8")
             code = textwrap.dedent("""
-                import io, sys
+                import io, os, sys
                 from pathlib import Path
                 from contextlib import redirect_stderr
                 from unittest.mock import patch
@@ -305,7 +305,7 @@ class LauncherTests(unittest.TestCase):
                 original_directory = Path.cwd()
                 with (patch('warehouse.launcher.Path.cwd', return_value=launch_directory) as cwd,
                       patch('os.chdir') as chdir, patch('builtins.open', wraps=open) as open_file,
-                      patch('io.open', wraps=io.open) as path_open, patch('os.mkdir') as mkdir,
+                      patch('io.open', wraps=io.open) as path_open, patch('os.mkdir', wraps=os.mkdir) as mkdir,
                       redirect_stderr(io.StringIO()) as stderr):
                     result = warehouse(['--config', './Input Files/../Input Files/Config.JSON',
                                         '--orders', './Orders.TXT'])
@@ -313,10 +313,16 @@ class LauncherTests(unittest.TestCase):
                 assert "supplied='./Input Files/../Input Files/Config.JSON'" in stderr.getvalue()
                 assert repr(str(launch_directory / 'Input Files' / 'Config.JSON')) in stderr.getvalue()
                 assert repr(str(launch_directory / 'Orders.TXT')) in stderr.getvalue()
-                assert 'reason=pending_run_folder' in stderr.getvalue()
+                assert 'reason=pending_simulation' in stderr.getvalue()
                 assert all(value != 'unpublished' for value in _numeric_initialization_state().values())
                 cwd.assert_called_once_with()
-                for boundary in (chdir, open_file, mkdir): boundary.assert_not_called()
+                for boundary in (chdir, open_file): boundary.assert_not_called()
+                mkdir.assert_called_once()
+                selected = Path(mkdir.call_args.args[0])
+                assert selected.parent == launch_directory and selected.is_dir()
+                assert mkdir.call_args.args[1] == 0o777
+                assert not list(selected.iterdir())
+                assert f'run_directory={selected}' in stderr.getvalue()
                 assert path_open.call_count == 5, path_open.call_args_list
                 assert Path.cwd() == original_directory
             """)
@@ -324,7 +330,7 @@ class LauncherTests(unittest.TestCase):
                                     capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_executable_paths_and_no_artifacts_from_different_directories(self) -> None:
+    def test_executable_paths_and_only_run_folders_from_different_directories(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture_root = Path(temporary).resolve()
             inputs = fixture_root / "Input Files"
@@ -334,7 +340,6 @@ class LauncherTests(unittest.TestCase):
             orders.write_text("Order Model Blue\nOrder Unknown Purple", encoding="utf-8")
             launch_directory = fixture_root / "Other Launch"
             launch_directory.mkdir()
-            before = sorted(fixture_root.rglob("*"))
             for launch in (fixture_root, launch_directory):
                 relative_config = os.path.relpath(config, launch)
                 relative_orders = os.path.relpath(orders, launch)
@@ -349,6 +354,7 @@ class LauncherTests(unittest.TestCase):
                         )
                 for argv, expected in cases:
                     with self.subTest(launch=launch, argv=argv):
+                        before = set(fixture_root.rglob("*"))
                         result = subprocess.run(
                             [sys.executable, str(PROJECT_ROOT / "warehouse"), *argv],
                             cwd=launch,
@@ -368,8 +374,8 @@ class LauncherTests(unittest.TestCase):
                                 ))
                             else:
                                 self.assertEqual(result.stdout, "")
-                            self.assertEqual(len(result.stderr.splitlines()), 1)
-                            self.assertTrue(result.stderr.startswith("[ERROR] "))
+                            errors = [line for line in result.stderr.splitlines() if line.startswith('[ERROR] ')]
+                            self.assertEqual(len(errors), 1)
                             self.assertIn(
                                 "simulation startup is not implemented", result.stderr
                             )
@@ -377,7 +383,19 @@ class LauncherTests(unittest.TestCase):
                             self.assertIn(f"resolved={str(config)!r}", result.stderr)
                             self.assertIn(f"supplied={argv[3]!r}", result.stderr)
                             self.assertIn(f"resolved={str(orders)!r}", result.stderr)
-                        self.assertEqual(sorted(fixture_root.rglob("*")), before)
+                        after = set(fixture_root.rglob('*'))
+                        added = after - before
+                        if expected == 1:
+                            self.assertEqual(len(added), 1)
+                            selected = added.pop()
+                            self.assertEqual(selected.parent, launch)
+                            self.assertTrue(selected.name.startswith('warehouse_'))
+                            self.assertEqual(list(selected.iterdir()), [])
+                            self.assertIn(f'run_directory={selected}', result.stderr)
+                            self.assertEqual(after, before | {selected})
+                            self.assertTrue(all('action=collision' in line for line in result.stderr.splitlines() if line not in errors))
+                        else:
+                            self.assertEqual(after, before)
             self.assertEqual(
                 config.read_text(encoding="utf-8"),
                 original_config,

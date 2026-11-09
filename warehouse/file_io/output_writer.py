@@ -12,12 +12,15 @@ failures use ERROR; this owner emits no INFO command or completion records.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 
 from warehouse.domain.location import Location
 from warehouse.domain.truck import Truck
+
+logger = logging.getLogger("warehouse")
 
 # TODO: Stage complete results and report retained incomplete artifacts on failure.
 
@@ -32,7 +35,39 @@ class OutputWriter:
 
         Report name collisions at WARNING and the chosen absolute path at DEBUG.
         """
-        ...
+        if started_at.utcoffset() is None:
+            raise ValueError("started_at must be an aware datetime")
+        parent = working_directory.resolve()
+        name = started_at.astimezone().strftime("warehouse_%Y%m%d%H%M")
+        candidate = parent / name
+        suffix = 0
+        created = False
+        try:
+            while True:
+                try:
+                    candidate.mkdir(exist_ok=False)
+                except FileExistsError:
+                    suffix += 1
+                    next_path = parent / f"{name}_{suffix:02d}"
+                    logger.warning(
+                        "function=output_writer.create_output_directory action=collision "
+                        "next_path=%s", next_path, extra={"path": candidate},
+                    )
+                    candidate = next_path
+                else:
+                    created = True
+                    logger.debug(
+                        "function=output_writer.create_output_directory action=created",
+                        extra={"path": candidate},
+                    )
+                    return candidate
+        except (OSError, ValueError) as error:
+            # Keep the original OS/transport failure and facts that cannot be
+            # recovered by the launcher when creation succeeds before logging fails.
+            error.warehouse_output_path = candidate
+            if created:
+                error.warehouse_run_directory = candidate
+            raise
 
     def write_orders(self, output_directory: Path, trucks: Sequence[Truck]) -> None:
         """Publish one manifest per loaded truck, including a retained partial truck."""

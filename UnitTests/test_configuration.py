@@ -505,7 +505,6 @@ class ConfigurationTests(unittest.TestCase):
         launch.mkdir()
         orders = self.path.parent / "orders.txt"
         orders.write_text("Order Model Blue\nOrder Unknown Purple", encoding="utf-8")
-        before = sorted(self.root.rglob("*"))
         for absolute in (False, True):
             document = copy.deepcopy(self.document)
             if absolute:
@@ -533,13 +532,14 @@ class ConfigurationTests(unittest.TestCase):
                     })
                     for debug in ([], ["--debug", "F"], ["--debug", "T"]):
                         with self.subTest(absolute=absolute, directory=directory, supplied=supplied, debug=debug):
+                            before = set(self.root.rglob('*'))
                             result = subprocess.run(
                                 [sys.executable, str(PROJECT_ROOT / "warehouse"), "--config", supplied,
                                  "--orders", str(orders), *debug], cwd=directory,
                                 capture_output=True, text=True, check=False,
                             )
                             self.assertEqual(result.returncode, 1, result.stderr)
-                            self.assertIn("reason=pending_run_folder", result.stderr)
+                            self.assertIn("reason=pending_simulation", result.stderr)
                             self.assertNotIn("[INFO]", result.stdout + result.stderr)
                             self.assertNotIn("default_stock", result.stdout)
                             if "T" in debug:
@@ -551,7 +551,14 @@ class ConfigurationTests(unittest.TestCase):
                                     self.assertIn(str(self.path.parent / filename), result.stdout)
                             else:
                                 self.assertEqual(result.stdout, "")
-                            self.assertEqual(sorted(self.root.rglob("*")), before)
+                            after = set(self.root.rglob('*'))
+                            added = after - before
+                            self.assertEqual(len(added), 1)
+                            selected = added.pop()
+                            self.assertEqual(selected.parent, directory)
+                            self.assertEqual(list(selected.iterdir()), [])
+                            self.assertIn(f'run_directory={selected}', result.stderr)
+                            self.assertEqual(after, before | {selected})
 
     def test_json_debug_values_cannot_change_launcher_console_selection(self) -> None:
         self.document["debug"] = "T"
@@ -568,11 +575,12 @@ class ConfigurationTests(unittest.TestCase):
                 "\nwith redirect_stdout(out),redirect_stderr(err): result=warehouse(sys.argv[1:])"
                 f"\nassert result==1; assert logging.getLogger('warehouse').level=={expected}; "
                 f"assert bool(out.getvalue())=={expected == logging.DEBUG}; "
-                "assert 'reason=pending_run_folder' in err.getvalue()"
+                "assert 'reason=pending_simulation' in err.getvalue()"
             )
             with self.subTest(options=options):
                 result = subprocess.run([sys.executable, "-c", code, "--config", str(self.path),
                                          "--orders", str(orders), *options],
+                                        cwd=self.root, env={**os.environ, 'PYTHONPATH': str(PROJECT_ROOT)},
                                         capture_output=True, text=True, check=False)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

@@ -103,9 +103,11 @@ class NumericInitializationTests(unittest.TestCase):
 
     def run_fresh(self, body: str, *, reverse: bool = False) -> subprocess.CompletedProcess:
         paths = (self.path_b, self.path_a) if reverse else (self.path_a, self.path_b)
+        launch = self.enterContext(tempfile.TemporaryDirectory(dir=self.root))
         result = subprocess.run(
             [sys.executable, "-c", CHILD_SETUP + textwrap.dedent(body), *map(str, paths)],
-            cwd=PROJECT_ROOT, capture_output=True, text=True, check=False,
+            cwd=launch, env={**os.environ, 'PYTHONPATH': str(PROJECT_ROOT)},
+            capture_output=True, text=True, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
@@ -350,6 +352,7 @@ class NumericInitializationTests(unittest.TestCase):
                     with self.subTest(reverse=reverse, contents=contents, options=options):
                         self.run_fresh(f"""
                             from warehouse.file_io.order_reader import OrderReader
+                            from warehouse.file_io.output_writer import OutputWriter
                             orders_path = path_a.parent / 'orders.txt'
                             orders_path.write_text({contents!r}, encoding='utf-8')
                             before = {{p: p.read_bytes() if p.is_file() else None
@@ -359,6 +362,7 @@ class NumericInitializationTests(unittest.TestCase):
                             real_read = OrderReader.read_orders
                             real_parse = OrderReader.parse_order
                             real_initialize = _initialize_numeric_constants
+                            real_create = OutputWriter.create_output_directory
                             def load(loader, path):
                                 assert_unpublished()
                                 config = real_load(loader, path)
@@ -383,6 +387,17 @@ class NumericInitializationTests(unittest.TestCase):
                                 real_initialize(config)
                                 assert_values(config)
                                 events.append('numeric')
+                            def create(writer, working_directory, started_at):
+                                assert events == ['config', 'orders', 'numeric']
+                                assert_values(returned[0])
+                                assert started_at.utcoffset() is not None
+                                selected = real_create(writer, working_directory, started_at)
+                                assert selected.is_absolute() and selected.is_dir()
+                                assert selected.parent == Path.cwd()
+                                assert not list(selected.iterdir())
+                                returned.append(selected)
+                                events.append('folder')
+                                return selected
                             out, err = io.StringIO(), io.StringIO()
                             with ExitStack() as stack:
                                 stack.enter_context(redirect_stdout(out))
@@ -391,18 +406,18 @@ class NumericInitializationTests(unittest.TestCase):
                                 stack.enter_context(patch.object(OrderReader, 'read_orders', read))
                                 stack.enter_context(patch.object(OrderReader, 'parse_order', parse))
                                 stack.enter_context(patch('warehouse.launcher._initialize_numeric_constants', initialize))
+                                stack.enter_context(patch.object(OutputWriter, 'create_output_directory', create))
                                 guards = [stack.enter_context(patch(target)) for target in (
                                     'warehouse.domain.warehouse_state.WarehouseState',
-                                    'warehouse.file_io.output_writer.OutputWriter.create_output_directory',
                                     'warehouse.workflow.warehouse_application.WarehouseApplication.run',
-                                    'os.chdir', 'os.mkdir',
+                                    'os.chdir',
                                 )]
                                 assert warehouse(['--config', str(path_a), '--orders', str(orders_path), *{options!r}]) == 1
                                 for guard in guards: guard.assert_not_called()
-                            assert events == ['config', 'orders', 'numeric'], events
+                            assert events == ['config', 'orders', 'numeric', 'folder'], events
                             assert lines == list(range(1, {len(contents.splitlines())} + 1)), lines
                             assert_values(returned[0])
-                            assert 'reason=pending_run_folder' in err.getvalue()
+                            assert 'reason=pending_simulation' in err.getvalue()
                             assert 'pending_order_preflight' not in err.getvalue()
                             assert 'pending_numeric_integration' not in err.getvalue()
                             assert len(err.getvalue().splitlines()) == 1

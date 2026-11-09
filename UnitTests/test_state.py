@@ -17,6 +17,7 @@ import unittest
 from collections import Counter, UserDict
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import FrozenInstanceError
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from unittest.mock import patch
@@ -31,6 +32,7 @@ from warehouse.domain.request_status import RequestStatus
 from warehouse.domain.worker_type import WorkerType
 from warehouse.file_io.activity_log import ActivityLog
 from warehouse.file_io.order_reader import OrderReader
+from warehouse.file_io.output_writer import OutputWriter
 from warehouse.launcher import _configure_console_logging, warehouse
 from warehouse.routing.route_planner import RoutePlanner
 
@@ -226,6 +228,7 @@ class ConstructorDiagnosticTests(unittest.TestCase):
     def test_retained_debug_event_inventory_matches_sources_context_and_individual_emissions(self) -> None:
         # Count source sites, including the two distinct SKU rejection branches.
         expected = Counter({
+            ("warehouse.file_io.output_writer.OutputWriter.create_output_directory", "output_writer.create_output_directory", "created"): 1,
             ("warehouse.launcher.warehouse", "launcher.warehouse", "entry"): 1,
             ("warehouse.file_io.order_reader.OrderReader.read_orders", "order_reader.read_orders", "validated"): 1,
             ("warehouse.file_io.order_reader.OrderReader.read_orders", "order_reader.read_orders", "rejected"): 2,
@@ -278,6 +281,7 @@ class ConstructorDiagnosticTests(unittest.TestCase):
                     reader.read_orders(orders_path)
                 orders_path.write_text("\nOrder Unknown Purple", encoding="utf-8")
                 self.assertEqual(reader.read_orders(orders_path), ((2, "Unknown", "Purple"),))
+                OutputWriter().create_output_directory(config_path.parent, datetime.now().astimezone())
             catalog = ProductCatalog({("Model", "Blue"): ("1", "2")})
             with self.assertRaises(ValueError):
                 catalog.resolve_skus("Unknown", "Blue")
@@ -293,6 +297,7 @@ class ConstructorDiagnosticTests(unittest.TestCase):
         self.assertEqual(len(lines), len(set(lines)))
         emitted = Counter()
         contexts = {
+            "output_writer.create_output_directory": ("path=",),
             "launcher.warehouse": ("config_supplied=", "orders_supplied=", "console_level=DEBUG"),
             "order_reader.read_orders": ("path=",),
             "order_reader.parse_order": ("path=", "line=", "field_count=", "fields=", "reason=invalid_grammar"),

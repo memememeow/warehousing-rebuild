@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import subprocess
 import sys
 import tempfile
@@ -149,8 +150,10 @@ class OrderLoggingTests(unittest.TestCase):
                     result = warehouse(['--config', str(config), '--orders', str(path), *{options!r}])
             finally: sys.setprofile(None)
             assert result == 1 and stream.hit
-            after_numeric = 'reason=pending_run_folder' in target
-            assert calls == ([('warehouse.launcher', '_initialize_numeric_constants')] if after_numeric else []), calls
+            after_numeric = 'reason=pending_simulation' in target
+            assert calls == ([('warehouse.launcher', '_initialize_numeric_constants'),
+                              ('warehouse.file_io.output_writer', 'create_output_directory')]
+                             if after_numeric else []), calls
             state = _numeric_initialization_state()
             assert all(type(value) is int if after_numeric else value == 'unpublished' for value in state.values())
             if not {unavailable_stderr!r}:
@@ -159,10 +162,18 @@ class OrderLoggingTests(unittest.TestCase):
                 for field in ('last_confirmed_trace_line=n/a', 'numeric_initialization=', str(path), str(config)):
                     assert field in fallback[0], field
             assert '[INFO]' not in out.getvalue() + err.getvalue()
-            assert before == {{p: p.read_bytes() if p.is_file() else None for p in root.rglob('*')}}
+            after = {{p: p.read_bytes() if p.is_file() else None for p in root.rglob('*')}}
+            assert all(after[p] == value for p, value in before.items())
+            added = set(after) - set(before)
+            assert len(added) == (1 if after_numeric else 0), added
+            if after_numeric:
+                selected = added.pop()
+                assert selected.parent == root and selected.is_dir() and not list(selected.iterdir())
+                assert f'run_directory={{selected}}' in err.getvalue()
         """)
         result = subprocess.run([sys.executable, "-c", code, str(path), str(self.config)],
-                                cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
+                                cwd=self.root, env={**os.environ, 'PYTHONPATH': str(PROJECT_ROOT)},
+                                capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_reader_event_failures_stop_numeric_work_and_use_direct_fallback(self) -> None:
@@ -173,7 +184,7 @@ class OrderLoggingTests(unittest.TestCase):
 
     def test_order_error_and_pending_boundary_transport_failures_in_every_mode(self) -> None:
         for case, reason in (("grammar", "order_preflight_failed"), ("missing", "order_preflight_failed"),
-                             ("decode", "order_preflight_failed"), ("valid", "pending_run_folder")):
+                             ("decode", "order_preflight_failed"), ("valid", "pending_simulation")):
             for options in ([], ["--debug", "F"], ["--debug", "T"]):
                 for operation in ("write", "flush", "short", "closed"):
                     with self.subTest(case=case, options=options, operation=operation):

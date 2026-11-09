@@ -1,6 +1,6 @@
-"""Verify step 02 console diagnostics; reserve trace and publication coverage.
+"""Verify console diagnostics and exclusive local-time run-folder creation.
 
-Future cases verify exclusive folder collisions, partial and empty trucks,
+Future cases verify partial and empty trucks,
 complete traversal coverage, exact trace grammar and staged publication.
 Injected console, write, flush, publish and cleanup failures must remain visible.
 
@@ -16,18 +16,176 @@ has no INFO lines; generated file formats and business results stay unchanged.
 from __future__ import annotations
 
 import io
+import inspect
 import logging
+import os
+import tempfile
 import unittest
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
+from typing import get_type_hints
 
 from UnitTests import assert_callable_traces, isolated_console_logging
 from warehouse.domain.product_catalog import ProductCatalog
 from warehouse.domain.request_status import RequestStatus
 from warehouse.domain.worker_type import WorkerType
-from warehouse.file_io.activity_log import ActivityLog
+from warehouse.file_io.activity_log import ActivityLog, _context_fields, _format_context
+from warehouse.file_io.output_writer import OutputWriter
 from warehouse.launcher import _configure_console_logging, warehouse
+
+
+class RunDirectoryTests(unittest.TestCase):
+    """Exercise naming, exclusive creation and preservation through real paths."""
+
+    def setUp(self) -> None:
+        self.enterContext(isolated_console_logging())
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self.stdout = self.enterContext(redirect_stdout(io.StringIO()))
+        self.stderr = self.enterContext(redirect_stderr(io.StringIO()))
+        _configure_console_logging(logging.DEBUG)
+        self.writer = OutputWriter()
+        self.started_at = datetime(2026, 7, 12, 17, 42, tzinfo=timezone.utc)
+        self.name = self.started_at.astimezone().strftime('warehouse_%Y%m%d%H%M')
+
+    def test_unused_name_is_absolute_local_and_activity_log_retains_it(self) -> None:
+        original = Path.cwd()
+        for name in ('Mixed Case Launch', 'Other Launch'):
+            launch = self.root / name
+            launch.mkdir()
+            selected = self.writer.create_output_directory(launch, self.started_at)
+            self.assertEqual(selected, launch / self.name)
+            self.assertTrue(selected.is_absolute() and selected.is_dir())
+            self.assertEqual(list(selected.iterdir()), [])
+            self.assertIs(ActivityLog(selected, self.stdout).run_directory, selected)
+        self.assertEqual(Path.cwd(), original)
+        lines = self.stdout.getvalue().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(line.startswith('[DEBUG] function=output_writer.create_output_directory action=created path=') for line in lines))
+        self.assertEqual(self.stderr.getvalue(), '')
+
+    def test_folder_surface_preserves_the_exact_public_contract(self) -> None:
+        method = OutputWriter.create_output_directory
+        self.assertEqual(tuple(inspect.signature(method).parameters), ('self', 'working_directory', 'started_at'))
+        self.assertEqual(get_type_hints(method), {'working_directory': Path, 'started_at': datetime, 'return': Path})
+
+    def test_collisions_include_files_and_preserve_every_previous_byte(self) -> None:
+        base = self.root / self.name
+        candidates = [base, *(self.root / f'{self.name}_{i:02d}' for i in range(1, 4))]
+        for index, candidate in enumerate(candidates):
+            if index == 1:
+                candidate.write_bytes(b'occupied file')
+            else:
+                candidate.mkdir()
+                (candidate / 'Sentinel.TXT').write_bytes(f'prior {index}'.encode())
+        before = {p: p.read_bytes() if p.is_file() else None for p in self.root.rglob('*')}
+        real_mkdir = Path.mkdir
+        attempts = []
+        def mkdir(path, *args, **kwargs):
+            attempts.append((path, kwargs))
+            return real_mkdir(path, *args, **kwargs)
+        with patch.object(Path, 'mkdir', mkdir), patch.object(Path, 'exists', side_effect=AssertionError('existence decision')):
+            selected = self.writer.create_output_directory(self.root, self.started_at)
+        self.assertEqual(selected, self.root / f'{self.name}_04')
+        self.assertEqual(attempts, [(p, {'exist_ok': False}) for p in (*candidates, selected)])
+        for path, contents in before.items():
+            self.assertEqual(path.read_bytes() if path.is_file() else None, contents)
+        warnings = self.stderr.getvalue().splitlines()
+        self.assertEqual(warnings, [
+            f'[WARNING] function=output_writer.create_output_directory action=collision next_path={next_path} '
+            + _format_context(_context_fields({'path': path}))
+            for path, next_path in zip(candidates, (*candidates[1:], selected))
+        ])
+        self.assertEqual(self.stdout.getvalue(), f'[DEBUG] function=output_writer.create_output_directory action=created path={selected}\n')
+
+    def test_naive_time_is_rejected_before_filesystem_mutation(self) -> None:
+        with patch('os.mkdir') as mkdir:
+            with self.assertRaisesRegex(ValueError, 'aware'):
+                self.writer.create_output_directory(self.root, datetime(2026, 1, 1))
+        mkdir.assert_not_called()
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_aware_nonlocal_offset_converts_the_instant(self) -> None:
+        supplied = self.started_at.astimezone(timezone(timedelta(hours=9, minutes=30)))
+        selected = self.writer.create_output_directory(self.root, supplied)
+        self.assertEqual(selected.name, self.name)
+
+    def test_noncollision_os_failures_propagate_without_retry(self) -> None:
+        sentinel = self.root / 'Keep.TXT'
+        sentinel.write_bytes(b'preserved')
+        for error in (PermissionError(13, 'denied'), FileNotFoundError(2, 'missing parent'), OSError(5, 'device failed')):
+            with self.subTest(error=error), patch('os.mkdir', side_effect=error) as mkdir:
+                with self.assertRaises(type(error)) as caught:
+                    self.writer.create_output_directory(self.root, self.started_at)
+                self.assertIs(caught.exception, error)
+                self.assertEqual(error.warehouse_output_path, self.root / self.name)
+                self.assertEqual(mkdir.call_count, 1)
+        self.assertEqual(sentinel.read_bytes(), b'preserved')
+        self.assertEqual(self.stderr.getvalue(), '')
+
+    def test_real_unavailable_launch_directory_is_not_created(self) -> None:
+        with self.assertRaises(FileNotFoundError):
+            self.writer.create_output_directory(self.root / 'Missing Parent', self.started_at)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_permission_failure_after_a_real_collision_stops_at_that_candidate(self) -> None:
+        base = self.root / self.name
+        base.write_bytes(b'prior file')
+        next_path = self.root / f'{self.name}_01'
+        real_mkdir = os.mkdir
+        failure = PermissionError(13, 'access denied', str(next_path))
+        def mkdir(path, *args, **kwargs):
+            if Path(path) == next_path:
+                raise failure
+            return real_mkdir(path, *args, **kwargs)
+        with patch('os.mkdir', side_effect=mkdir) as boundary:
+            with self.assertRaises(PermissionError) as caught:
+                self.writer.create_output_directory(self.root, self.started_at)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual([call.args[0] for call in boundary.call_args_list], [base, next_path])
+        self.assertEqual(base.read_bytes(), b'prior file')
+        self.assertEqual(len(self.stderr.getvalue().splitlines()), 1)
+        self.assertEqual(self.stdout.getvalue(), '')
+
+    def test_diagnostic_failures_preserve_identity_and_confirmed_filesystem_effects(self) -> None:
+        from UnitTests.test_order_logging import FailingDiagnosticStream
+        for action in ('collision', 'created'):
+            for operation in ('write', 'flush', 'short', 'closed', 'collision_shaped'):
+                with self.subTest(action=action, operation=operation):
+                    launch = self.root / f'{action} {operation}'
+                    launch.mkdir()
+                    base = launch / self.name
+                    base.write_bytes(b'preserved')
+                    target = f'function=output_writer.create_output_directory action={action}'
+                    stream = FailingDiagnosticStream(target, operation)
+                    if operation == 'collision_shaped':
+                        stream.operation = 'write'
+                        stream.failure = FileExistsError(17, 'diagnostic collision')
+                    stdout, stderr = (stream, io.StringIO()) if action == 'created' else (io.StringIO(), stream)
+                    with (redirect_stdout(stdout), redirect_stderr(stderr),
+                          patch.object(logging, 'raiseExceptions', False)):
+                        _configure_console_logging(logging.DEBUG)
+                        with patch('os.mkdir', wraps=os.mkdir) as mkdir:
+                            with self.assertRaises((OSError, ValueError)) as caught:
+                                self.writer.create_output_directory(launch, self.started_at)
+                    error = caught.exception
+                    self.assertTrue(stream.hit and error.warehouse_logging_failure)
+                    if operation in ('write', 'flush', 'collision_shaped'):
+                        self.assertIs(error, stream.failure)
+                    self.assertIsNone(error.__cause__)
+                    self.assertEqual(mkdir.call_count, 2 if action == 'created' else 1)
+                    self.assertEqual(base.read_bytes(), b'preserved')
+                    selected = launch / f'{self.name}_01'
+                    if action == 'created':
+                        self.assertEqual(error.warehouse_run_directory, selected)
+                        self.assertEqual(error.warehouse_output_path, selected)
+                        self.assertTrue(selected.is_dir())
+                        self.assertEqual(list(selected.iterdir()), [])
+                    else:
+                        self.assertEqual(error.warehouse_output_path, base)
+                        self.assertFalse(hasattr(error, 'warehouse_run_directory'))
+                        self.assertFalse(selected.exists())
 
 
 class ConsoleLoggingTests(unittest.TestCase):

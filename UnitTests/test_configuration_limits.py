@@ -79,7 +79,7 @@ class ConfigurationLimitTests(unittest.TestCase):
                         result = warehouse(['--config', str(path), '--orders', str(orders), *{options!r}])
                         config = ConfigLoader().load_config(path)
                         decoded = _read_json(path, str(path))
-                    assert result == 1 and 'reason=pending_run_folder' in err.getvalue()
+                    assert result == 1 and 'reason=pending_simulation' in err.getvalue()
                     assert 'configuration_failed' not in err.getvalue()
                     assert 'console_logging_failed' not in err.getvalue()
                     fields = {tuple(field for section in ('warehouse', 'identifiers') for field, value in self.document[section].items() if type(value) is int)!r}
@@ -111,6 +111,7 @@ class ConfigurationLimitTests(unittest.TestCase):
                 """)
                 with self.subTest(digits=digits, options=options):
                     result = subprocess.run([sys.executable, '-c', code, str(self.path), str(self.orders)],
+                                            cwd=self.root, env={**os.environ, 'PYTHONPATH': str(PROJECT_ROOT)},
                                             capture_output=True, text=True, check=False)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual({path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}, before)
@@ -244,10 +245,11 @@ class ConfigurationLimitTests(unittest.TestCase):
                     with patch('warehouse.configuration.config_loader._diagnostic_text', side_effect=render):
                         assert warehouse(['--config', sys.argv[1], '--orders', sys.argv[2], *{options!r}]) == 1
                 assert out.getvalue() == ''
-                assert 'reason=pending_run_folder' in err.getvalue()
+                assert 'reason=pending_simulation' in err.getvalue()
             """)
             with self.subTest(options=options):
                 result = subprocess.run([sys.executable, '-c', code, str(self.path), str(self.orders)],
+                                        cwd=self.root, env={**os.environ, 'PYTHONPATH': str(PROJECT_ROOT)},
                                         capture_output=True, text=True, check=False)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -257,7 +259,6 @@ class ConfigurationLimitTests(unittest.TestCase):
         self.path.write_text(json.dumps(self.document), encoding="utf-8")
         launch = self.root / "Other Launch"
         launch.mkdir()
-        before = sorted(self.root.rglob("*"))
         for zone in (None, "UTC0", "EST5EDT", "NPT-5:45"):
             environment = dict(os.environ)
             if zone is not None:
@@ -271,15 +272,18 @@ class ConfigurationLimitTests(unittest.TestCase):
                 for supplied in (os.path.relpath(self.path, directory), str(self.path)):
                     for options in ([], ["--debug", "F"], ["--debug", "T"]):
                         with self.subTest(zone=zone, directory=directory, supplied=supplied, options=options):
+                            before = set(self.root.rglob('*'))
                             result = subprocess.run(
                                 [sys.executable, str(PROJECT_ROOT / "warehouse"), "--config", supplied,
                                  "--orders", str(self.orders), *options], cwd=directory,
                                 env=environment, capture_output=True, text=True, check=False,
                             )
-                            self.assertIn("reason=pending_run_folder", result.stderr)
+                            self.assertIn("reason=pending_simulation", result.stderr)
                             self.assertEqual(result.returncode, 1)
                             warnings = [line for line in result.stderr.splitlines() if line.startswith("[WARNING]")]
-                            self.assertEqual(len(warnings), 2)
+                            legacy_warnings = [line for line in warnings if 'function=config_loader.' in line]
+                            self.assertEqual(len(legacy_warnings), 2)
+                            self.assertTrue(all('action=collision' in line for line in warnings if line not in legacy_warnings))
                             output_warning = next(line for line in warnings if "files.output_root" in line)
                             zone_warning = next(line for line in warnings if "identifiers.request_timestamp_timezone" in line)
                             self.assertIn("output_parent=" + str(directory), output_warning)
@@ -294,7 +298,14 @@ class ConfigurationLimitTests(unittest.TestCase):
                             self.assertNotIn("[WARNING]", result.stdout)
                             self.assertNotIn("[INFO]", result.stdout + result.stderr)
                             self.assertEqual(bool(result.stdout), "T" in options)
-                            self.assertEqual(sorted(self.root.rglob("*")), before)
+                            after = set(self.root.rglob('*'))
+                            added = after - before
+                            self.assertEqual(len(added), 1)
+                            selected = added.pop()
+                            self.assertEqual(selected.parent, directory)
+                            self.assertEqual(list(selected.iterdir()), [])
+                            self.assertIn(f'run_directory={selected}', result.stderr)
+                            self.assertEqual(after, before | {selected})
 
     def test_each_warning_transport_failure_propagates_original_error(self) -> None:
         for field in ("output_root", "request_timestamp_timezone"):
