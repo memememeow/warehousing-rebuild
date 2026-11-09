@@ -80,7 +80,6 @@ def warehouse(argv: Sequence[str]) -> int:
         return 1
 
     # TODO (steps 11, 20-23): Construct state/dependencies, run and publish results.
-    failure_reason = "configuration_failed"
     try:
         # Parsing and transport setup stay silent; help must stop before startup.
         if logger.isEnabledFor(logging.DEBUG):
@@ -99,16 +98,29 @@ def warehouse(argv: Sequence[str]) -> int:
         context["orders_resolved"] = orders_path
 
         config = ConfigLoader(working_directory).load_config(config_path)
-        failure_reason = "order_preflight_failed"
-        orders = OrderReader().read_orders(orders_path)
-        _initialize_numeric_constants(config)
+    except (OSError, ValueError, RuntimeError) as error:
+        _report_startup_failure(error, "configuration_failed", context)
+        return 1
 
-        failure_reason = "run_folder_failed"
+    try:
+        orders = OrderReader().read_orders(orders_path)
+    except (OSError, ValueError, RuntimeError) as error:
+        _report_startup_failure(error, "order_preflight_failed", context)
+        return 1
+
+    try:
+        _initialize_numeric_constants(config)
+    except (OSError, ValueError, RuntimeError) as error:
+        # Keep the existing preflight reason for non-invariant initializer errors.
+        _report_startup_failure(error, "order_preflight_failed", context)
+        return 1
+
+    try:
         files = OutputWriter()
         output_directory = files.create_output_directory(working_directory, started_at)
         context["run_directory"] = output_directory
     except (OSError, ValueError, RuntimeError) as error:
-        _report_startup_failure(error, failure_reason, context)
+        _report_startup_failure(error, "run_folder_failed", context)
         return 1
 
     # Retain orders for run (20), files/output_directory for application
@@ -167,10 +179,10 @@ def _numeric_initialization_state() -> dict[str, object]:
 
 def _report_startup_failure(
     error: OSError | ValueError | RuntimeError,
-    failure_reason: str,
+    default_reason: str,
     context: dict[str, object],
 ) -> None:
-    """Report the last startup boundary and retain any published owner state."""
+    """Report the boundary's default reason and retain published owner state."""
     if hasattr(error, "warehouse_run_directory"):
         context["run_directory"] = error.warehouse_run_directory
     elif hasattr(error, "warehouse_output_path"):
@@ -181,7 +193,7 @@ def _report_startup_failure(
         _report_logging_failure(error, context)
         return
 
-    reason = "startup_invariant_failed" if isinstance(error, RuntimeError) else failure_reason
+    reason = "startup_invariant_failed" if isinstance(error, RuntimeError) else default_reason
     # Input paths and standard diagnostic fields are emitted separately below.
     failure_context = {
         key: value for key, value in context.items()
