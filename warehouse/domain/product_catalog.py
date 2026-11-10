@@ -32,6 +32,7 @@ class ProductCatalog:
     ) -> None:
         """Validate normalized product keys and retain a frozen defensive copy."""
         normalized_products: dict[tuple[str, str], tuple[str, str]] = {}
+
         for supplied_product, skus in products.items():
             normalized_product = _normalize_product(supplied_product, skus)
             if normalized_product in normalized_products:
@@ -45,8 +46,10 @@ class ProductCatalog:
                     supplied_product, normalized_product, reason, extra={"sku_evidence": skus},
                 )
                 raise ValueError(reason)
+
             _validate_skus(supplied_product, normalized_product, skus)
             normalized_products[normalized_product] = (skus[0], skus[1])
+
         object.__setattr__(self, "products", MappingProxyType(normalized_products))
 
     def resolve_skus(self, model: str, colour: str) -> tuple[str, str]:
@@ -61,6 +64,7 @@ class ProductCatalog:
             raise ValueError(
                 f"Unknown product: supplied={(model, colour)!r}, normalized={normalized_product!r}"
             )
+
         return self.products[normalized_product]
 
 
@@ -68,8 +72,11 @@ def _normalize_product(
     product: tuple[str, str], skus: tuple[str, str]
 ) -> tuple[str, str]:
     """Validate a source key before trimming and case-folding its two parts."""
-    if (not isinstance(product, tuple) or len(product) != 2
-            or not all(isinstance(part, str) for part in product)):
+    if (
+        not isinstance(product, tuple)
+        or len(product) != 2
+        or not all(isinstance(part, str) for part in product)
+    ):
         reason = f"Product key must be a model/colour string pair: {product!r}"
         logger.debug(
             "function=product_catalog._normalize_product action=rejected "
@@ -77,6 +84,7 @@ def _normalize_product(
             product, reason, extra={"sku_evidence": skus},
         )
         raise ValueError(reason)
+
     model, colour = product
     return model.strip().casefold(), colour.strip().casefold()
 
@@ -93,10 +101,14 @@ def _validate_skus(
             product, normalized_product, reason, extra={"sku_evidence": skus},
         )
         raise ValueError(reason)
+
     for side, sku in zip(("front", "back"), skus, strict=True):
         # Inspect decimal digits without parsing or changing the SKU token.
-        if (not isinstance(sku, str) or not sku.isdecimal()
-                or not any(decimal(digit) for digit in sku)):
+        if (
+            not isinstance(sku, str)
+            or not sku.isdecimal()
+            or not any(decimal(digit) for digit in sku)
+        ):
             reason = (
                 f"Product {product!r} {side} SKU must be a positive decimal string: {sku!r}"
             )

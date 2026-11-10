@@ -27,8 +27,10 @@ type SequencingAssignment = tuple[FulfillmentRequest, tuple[str, ...] | None]
 def initialize_sequencing_constants(config: WarehouseConfig) -> None:
     """Publish the validated pallet capacity once before state exists."""
     global PALLET_CAPACITY_FASCIA
+
     if "PALLET_CAPACITY_FASCIA" in globals():
         raise RuntimeError("sequencing_workflow numeric constants already initialized")
+
     PALLET_CAPACITY_FASCIA = config.pallet_capacity_fascia
 
 
@@ -36,6 +38,7 @@ def __getattr__(name: str) -> object:
     """Reject numeric reads before explicit startup publication."""
     if name == "PALLET_CAPACITY_FASCIA":
         raise RuntimeError(f"sequencing_workflow.{name} read before numeric initialization")
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

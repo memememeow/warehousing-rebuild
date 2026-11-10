@@ -56,8 +56,10 @@ class WarehouseConfig:
         """Freeze defensive reference copies; ConfigLoader validates scalar inputs."""
         locations = MappingProxyType(dict(self.location_map))
         stock = MappingProxyType(dict(self.initial_stock))
-        employees = MappingProxyType({role: tuple(names) for role, names in self.employees.items()})
+        employees = MappingProxyType({
+            role: tuple(names) for role, names in self.employees.items()
+        })
+
         object.__setattr__(self, "location_map", locations)
         object.__setattr__(self, "initial_stock", stock)
         object.__setattr__(self, "employees", employees)
-

@@ -62,16 +62,7 @@ def warehouse(argv: Sequence[str]) -> int:
     """
     arguments = _parse_arguments(argv)
     console_level = logging.DEBUG if arguments.debug == "T" else logging.INFO
-    context: dict[str, object] = {
-        "argv": tuple(argv),
-        "config_supplied": arguments.config,
-        "orders_supplied": arguments.orders,
-        "config_resolved": "n/a",
-        "orders_resolved": "n/a",
-        "working_directory": "n/a",
-        "debug": arguments.debug,
-        "console_level": logging.getLevelName(console_level),
-    }
+    context = _startup_context(argv, arguments, console_level)
 
     try:
         _configure_console_logging(console_level)
@@ -154,6 +145,21 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _startup_context(
+    argv: Sequence[str], arguments: argparse.Namespace, console_level: int,
+) -> dict[str, object]:
+    return {
+        "argv": tuple(argv),
+        "config_supplied": arguments.config,
+        "orders_supplied": arguments.orders,
+        "config_resolved": "n/a",
+        "orders_resolved": "n/a",
+        "working_directory": "n/a",
+        "debug": arguments.debug,
+        "console_level": logging.getLevelName(console_level),
+    }
+
+
 def _initialize_numeric_constants(config: WarehouseConfig) -> None:
     """Coordinate one publication after complete preflight, before any state.
 
@@ -166,95 +172,6 @@ def _initialize_numeric_constants(config: WarehouseConfig) -> None:
     sequencing_workflow.initialize_sequencing_constants(config)
     truck.initialize_truck_constants(config)
     loading_workflow.initialize_loading_constants(config)
-
-
-def _numeric_initialization_state() -> dict[str, object]:
-    """Read actual published bindings for failure evidence without early reads."""
-    return {
-        f"{module.__name__}.{name}": vars(module).get(name, "unpublished")
-        for module in (inventory, order_registry, sequencing_workflow, truck, loading_workflow)
-        for name in module.__annotations__
-    }
-
-
-def _report_startup_failure(
-    error: OSError | ValueError | RuntimeError,
-    default_reason: str,
-    context: dict[str, object],
-) -> None:
-    """Report the boundary's default reason and retain published owner state."""
-    if hasattr(error, "warehouse_run_directory"):
-        context["run_directory"] = error.warehouse_run_directory
-    elif hasattr(error, "warehouse_output_path"):
-        context["path"] = error.warehouse_output_path
-    context["numeric_initialization"] = _numeric_initialization_state()
-
-    if getattr(error, "warehouse_logging_failure", False):
-        _report_logging_failure(error, context)
-        return
-
-    reason = "startup_invariant_failed" if isinstance(error, RuntimeError) else default_reason
-    # Input paths and standard diagnostic fields are emitted separately below.
-    failure_context = {
-        key: value for key, value in context.items()
-        if key not in (
-            "argv", "config_supplied", "config_resolved",
-            "orders_supplied", "orders_resolved", *DIAGNOSTIC_FIELDS,
-        )
-    }
-
-    try:
-        logger.error(
-            "function=launcher.warehouse action=aborted result=INCOMPLETE "
-            "reason=%s error=%r; config supplied=%r resolved=%r; "
-            "orders supplied=%r resolved=%r; last_confirmed_trace_line=n/a %s",
-            reason, str(error), context["config_supplied"], str(context["config_resolved"]),
-            context["orders_supplied"], str(context["orders_resolved"]),
-            _format_context(failure_context),
-            extra={key: context[key] for key in DIAGNOSTIC_FIELDS if key in context},
-        )
-    except (OSError, ValueError) as transport_error:
-        _report_logging_failure(transport_error, {
-            **context, "startup_failure": reason, "startup_error": error,
-        })
-
-
-def _report_pending_simulation(order_count: int, context: Mapping[str, object]) -> None:
-    """Keep validated startup distinct from the deferred simulation runtime."""
-    try:
-        logger.error(
-            "function=launcher.warehouse action=aborted "
-            "configuration validated; complete order preflight and numeric initialization validated; "
-            "simulation startup is not implemented; "
-            "reason=pending_simulation deferred_steps=09-23 order_count=%d; "
-            "config supplied=%r, resolved=%r; orders supplied=%r, resolved=%r "
-            "result=INCOMPLETE last_confirmed_trace_line=n/a",
-            order_count, context["config_supplied"], str(context["config_resolved"]),
-            context["orders_supplied"], str(context["orders_resolved"]),
-            extra={"run_directory": context["run_directory"]},
-        )
-    except (OSError, ValueError) as error:
-        _report_logging_failure(error, context)
-
-
-def _report_logging_failure(
-    error: OSError | ValueError, context: Mapping[str, object]
-) -> None:
-    """Attempt direct stderr reporting even when the configured transport fails."""
-    context = {**context, "numeric_initialization": _numeric_initialization_state()}
-    text = (
-        "[ERROR] function=launcher.warehouse action=aborted result=INCOMPLETE "
-        f"reason=console_logging_failed error={str(error)!r} "
-        "last_confirmed_trace_line=n/a "
-        f"{_format_context(_context_fields(context))}\n"
-    )
-
-    try:
-        sys.stderr.write(text)
-        sys.stderr.flush()
-    except (OSError, ValueError):
-        # No functioning error stream remains; the nonzero exit still signals failure.
-        pass
 
 
 def _configure_console_logging(console_level: int) -> None:
@@ -297,19 +214,119 @@ class _CheckedStreamHandler(logging.StreamHandler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            record = copy(record)
-            fields = _context_fields({
-                field: record.__dict__[field] for field in DIAGNOSTIC_FIELDS
-                if field in record.__dict__
-            }, record.levelno)
-            context = _format_context(fields) if record.levelno != logging.INFO else ""
-
-            text = self.format(record) + (f" {context}" if context else "") + self.terminator
+            text = self._format_record(record)
             if self.stream.write(text) != len(text):
                 raise OSError("console stream did not write the complete diagnostic")
+
             self.flush()
         except (OSError, ValueError) as error:
             # Preserve type, identity and traceback while distinguishing transport
             # from input errors raised by configuration readers and callbacks.
             error.warehouse_logging_failure = True
             raise
+
+    def _format_record(self, record: logging.LogRecord) -> str:
+        record = copy(record)
+        fields = _context_fields({
+            field: record.__dict__[field]
+            for field in DIAGNOSTIC_FIELDS
+            if field in record.__dict__
+        }, record.levelno)
+        context = _format_context(fields) if record.levelno != logging.INFO else ""
+
+        return self.format(record) + (f" {context}" if context else "") + self.terminator
+
+
+def _report_startup_failure(
+    error: OSError | ValueError | RuntimeError,
+    default_reason: str,
+    context: dict[str, object],
+) -> None:
+    """Report the boundary's default reason and retain published owner state."""
+    if hasattr(error, "warehouse_run_directory"):
+        context["run_directory"] = error.warehouse_run_directory
+    elif hasattr(error, "warehouse_output_path"):
+        context["path"] = error.warehouse_output_path
+
+    context["numeric_initialization"] = _numeric_initialization_state()
+
+    if getattr(error, "warehouse_logging_failure", False):
+        _report_logging_failure(error, context)
+        return
+
+    reason = "startup_invariant_failed" if isinstance(error, RuntimeError) else default_reason
+    # Input paths and standard diagnostic fields are emitted separately below.
+    failure_context = {
+        key: value
+        for key, value in context.items()
+        if key not in (
+            "argv", "config_supplied", "config_resolved",
+            "orders_supplied", "orders_resolved", *DIAGNOSTIC_FIELDS,
+        )
+    }
+
+    try:
+        logger.error(
+            "function=launcher.warehouse action=aborted result=INCOMPLETE "
+            "reason=%s error=%r; config supplied=%r resolved=%r; "
+            "orders supplied=%r resolved=%r; last_confirmed_trace_line=n/a %s",
+            reason, str(error),
+            context["config_supplied"], str(context["config_resolved"]),
+            context["orders_supplied"], str(context["orders_resolved"]),
+            _format_context(failure_context),
+            extra={key: context[key] for key in DIAGNOSTIC_FIELDS if key in context},
+        )
+    except (OSError, ValueError) as transport_error:
+        _report_logging_failure(
+            transport_error,
+            {**context, "startup_failure": reason, "startup_error": error},
+        )
+
+
+def _report_pending_simulation(order_count: int, context: Mapping[str, object]) -> None:
+    """Keep validated startup distinct from the deferred simulation runtime."""
+    try:
+        logger.error(
+            "function=launcher.warehouse action=aborted "
+            "configuration validated; complete order preflight and numeric initialization validated; "
+            "simulation startup is not implemented; "
+            "reason=pending_simulation deferred_steps=09-23 order_count=%d; "
+            "config supplied=%r, resolved=%r; orders supplied=%r, resolved=%r "
+            "result=INCOMPLETE last_confirmed_trace_line=n/a",
+            order_count, context["config_supplied"], str(context["config_resolved"]),
+            context["orders_supplied"], str(context["orders_resolved"]),
+            extra={"run_directory": context["run_directory"]},
+        )
+    except (OSError, ValueError) as error:
+        _report_logging_failure(error, context)
+
+
+def _report_logging_failure(
+    error: OSError | ValueError, context: Mapping[str, object]
+) -> None:
+    """Attempt direct stderr reporting even when the configured transport fails."""
+    context = {**context, "numeric_initialization": _numeric_initialization_state()}
+    text = (
+        "[ERROR] function=launcher.warehouse action=aborted result=INCOMPLETE "
+        f"reason=console_logging_failed error={str(error)!r} "
+        "last_confirmed_trace_line=n/a "
+        f"{_format_context(_context_fields(context))}\n"
+    )
+
+    try:
+        sys.stderr.write(text)
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        # No functioning error stream remains; the nonzero exit still signals failure.
+        pass
+
+
+def _numeric_initialization_state() -> dict[str, object]:
+    """Read actual published bindings for failure evidence without early reads."""
+    return {
+        f"{module.__name__}.{name}": vars(module).get(name, "unpublished")
+        for module in (
+            inventory, order_registry, sequencing_workflow, truck, loading_workflow,
+        )
+        for name in module.__annotations__
+    }

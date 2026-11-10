@@ -33,6 +33,7 @@ class OrderReader:
                 "reason=read_failed path=%s error=%r", path, error,
             )
             raise OSError(f"orders path={str(path)!r}; cannot read orders: {error}") from error
+
         try:
             text = contents.decode("utf-8")
         except UnicodeDecodeError as error:
@@ -47,21 +48,14 @@ class OrderReader:
                 f"orders path={str(path)!r}; invalid UTF-8 "
                 f"byte_offset={error.start} byte_end={error.end} (zero-based): {error.reason}"
             ) from error
-        orders: list[OrderLine] = []
-        line_count = 0
-        # Match text-file universal newlines without splitting other whitespace
-        # such as vertical tabs, which belong to the three-field grammar.
-        with StringIO(text, newline=None) as lines:
-            for line_count, line in enumerate(lines, start=1):
-                order = self.parse_order(line, path, line_count)
-                if order is not None:
-                    orders.append(order)
+
+        orders, line_count = self._parse_lines(text, path)
         logger.debug(
             "function=order_reader.read_orders action=validated "
             "path=%s byte_count=%d line_count=%d order_count=%d blank_count=%d",
             path, len(contents), line_count, len(orders), line_count - len(orders),
         )
-        return tuple(orders)
+        return orders
 
     def parse_order(
         self, text: str, source: Path, line_number: int
@@ -70,6 +64,7 @@ class OrderReader:
         fields = text.split()
         if not fields:
             return None
+
         if len(fields) != 3 or fields[0].casefold() != "order":
             logger.debug(
                 "function=order_reader.parse_order action=rejected "
@@ -80,4 +75,18 @@ class OrderReader:
                 f"orders path={str(source)!r} line={line_number}; "
                 f"expected Order <model> <colour> (three fields); observed fields={fields!r}"
             )
+
         return line_number, fields[1], fields[2]
+
+    def _parse_lines(self, text: str, path: Path) -> tuple[tuple[OrderLine, ...], int]:
+        orders: list[OrderLine] = []
+        line_count = 0
+        # Match text-file universal newlines without splitting other whitespace
+        # such as vertical tabs, which belong to the three-field grammar.
+        with StringIO(text, newline=None) as lines:
+            for line_count, line in enumerate(lines, start=1):
+                order = self.parse_order(line, path, line_count)
+                if order is not None:
+                    orders.append(order)
+
+        return tuple(orders), line_count

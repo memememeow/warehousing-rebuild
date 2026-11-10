@@ -22,8 +22,10 @@ CAPACITY_REQUESTS: Final[int]
 def initialize_truck_constants(config: WarehouseConfig) -> None:
     """Publish the validated request-count capacity once before state exists."""
     global CAPACITY_REQUESTS
+
     if "CAPACITY_REQUESTS" in globals():
         raise RuntimeError("truck numeric constants already initialized")
+
     CAPACITY_REQUESTS = config.truck_capacity_requests
 
 
@@ -31,6 +33,7 @@ def __getattr__(name: str) -> object:
     """Reject numeric reads before explicit startup publication."""
     if name == "CAPACITY_REQUESTS":
         raise RuntimeError(f"truck.{name} read before numeric initialization")
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -49,6 +52,7 @@ class Truck:
         """Expose the owning module's configured capacity without a setter."""
         if "CAPACITY_REQUESTS" not in globals():
             raise RuntimeError("truck.CAPACITY_REQUESTS read before numeric initialization")
+
         return CAPACITY_REQUESTS
 
     def record_request(self, request: FulfillmentRequest) -> None:

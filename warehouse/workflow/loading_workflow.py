@@ -29,15 +29,20 @@ type LoadingAssignment = tuple[FulfillmentRequest, tuple[str, ...] | None]
 def initialize_loading_constants(config: WarehouseConfig) -> None:
     """Publish validated truck identifier settings once before state exists."""
     global FIRST_TRUCK_NUMBER, TRUCK_MINIMUM_DIGITS
+
     if any(name in globals() for name in ("FIRST_TRUCK_NUMBER", "TRUCK_MINIMUM_DIGITS")):
         raise RuntimeError("loading_workflow numeric constants already initialized")
-    FIRST_TRUCK_NUMBER, TRUCK_MINIMUM_DIGITS = config.first_truck_number, config.truck_minimum_digits
+
+    FIRST_TRUCK_NUMBER, TRUCK_MINIMUM_DIGITS = (
+        config.first_truck_number, config.truck_minimum_digits,
+    )
 
 
 def __getattr__(name: str) -> object:
     """Reject numeric reads before explicit startup publication."""
     if name in ("FIRST_TRUCK_NUMBER", "TRUCK_MINIMUM_DIGITS"):
         raise RuntimeError(f"loading_workflow.{name} read before numeric initialization")
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -48,7 +53,7 @@ class LoadingWorkflow:
 
     loading_queue: dict[int, FulfillmentRequest]
     loader_assignments: dict[str, LoadingAssignment]
-    
+
     next_request_number: int
     next_truck_number: int
     current_truck: Truck

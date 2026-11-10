@@ -30,15 +30,20 @@ type StockChange = tuple[Location, int, int, int]
 def initialize_inventory_constants(config: WarehouseConfig) -> None:
     """Publish validated settings once; schema/range checks belong to ConfigLoader."""
     global DEFAULT_STOCK, REPLENISHMENT_THRESHOLD
+
     if any(name in globals() for name in ("DEFAULT_STOCK", "REPLENISHMENT_THRESHOLD")):
         raise RuntimeError("inventory numeric constants already initialized")
-    DEFAULT_STOCK, REPLENISHMENT_THRESHOLD = config.default_stock, config.replenishment_threshold
+
+    DEFAULT_STOCK, REPLENISHMENT_THRESHOLD = (
+        config.default_stock, config.replenishment_threshold,
+    )
 
 
 def __getattr__(name: str) -> object:
     """Reject numeric reads before explicit startup publication."""
     if name in ("DEFAULT_STOCK", "REPLENISHMENT_THRESHOLD"):
         raise RuntimeError(f"inventory.{name} read before numeric initialization")
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

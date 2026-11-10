@@ -30,11 +30,13 @@ def initialize_order_constants(config: WarehouseConfig) -> None:
     """Publish validated batch and identifier settings once before state exists."""
     global ORDERS_PER_REQUEST, FIRST_ORDER_NUMBER, ORDER_MINIMUM_DIGITS
     global FIRST_REQUEST_NUMBER, REQUEST_MINIMUM_DIGITS
+
     if any(name in globals() for name in (
         "ORDERS_PER_REQUEST", "FIRST_ORDER_NUMBER", "ORDER_MINIMUM_DIGITS",
         "FIRST_REQUEST_NUMBER", "REQUEST_MINIMUM_DIGITS",
     )):
         raise RuntimeError("order_registry numeric constants already initialized")
+
     (
         ORDERS_PER_REQUEST, FIRST_ORDER_NUMBER, ORDER_MINIMUM_DIGITS,
         FIRST_REQUEST_NUMBER, REQUEST_MINIMUM_DIGITS,
@@ -51,6 +53,7 @@ def __getattr__(name: str) -> object:
         "FIRST_REQUEST_NUMBER", "REQUEST_MINIMUM_DIGITS",
     ):
         raise RuntimeError(f"order_registry.{name} read before numeric initialization")
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -58,11 +61,11 @@ class OrderRegistry:
     """Own order acceptance, request formation, counters and input closure."""
 
     config: WarehouseConfig
-    
+
     accepted_orders: dict[str, Order]
     pending_orders: deque[Order]
     requests: dict[int, FulfillmentRequest]
-    
+
     next_order_number: int
     next_request_number: int
     input_closed: bool

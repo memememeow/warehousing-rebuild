@@ -37,11 +37,13 @@ class OutputWriter:
         """
         if started_at.utcoffset() is None:
             raise ValueError("started_at must be an aware datetime")
+
         parent = working_directory.resolve()
         name = started_at.astimezone().strftime("warehouse_%Y%m%d%H%M")
         candidate = parent / name
         suffix = 0
         created = False
+
         try:
             while True:
                 try:
@@ -54,13 +56,14 @@ class OutputWriter:
                         "next_path=%s", next_path, extra={"path": candidate},
                     )
                     candidate = next_path
-                else:
-                    created = True
-                    logger.debug(
-                        "function=output_writer.create_output_directory action=created",
-                        extra={"path": candidate},
-                    )
-                    return candidate
+                    continue
+
+                created = True
+                logger.debug(
+                    "function=output_writer.create_output_directory action=created",
+                    extra={"path": candidate},
+                )
+                return candidate
         except (OSError, ValueError) as error:
             # Keep the original OS/transport failure and facts that cannot be
             # recovered by the launcher when creation succeeds before logging fails.

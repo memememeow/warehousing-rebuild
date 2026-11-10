@@ -37,61 +37,6 @@ DIAGNOSTIC_FIELDS: Final[tuple[str, ...]] = (
 )
 
 
-def _context_fields(
-    context: Mapping[str, object], level: int = logging.ERROR,
-) -> dict[str, object]:
-    """Omit unavailable DEBUG evidence; retain failure placeholders and caller data."""
-    if level < logging.WARNING:
-        return {
-            name: value for name, value in context.items()
-            if value is not None and not (isinstance(value, str) and value == "n/a")
-        }
-    fields: dict[str, object] = dict.fromkeys(DIAGNOSTIC_FIELDS, "n/a")
-    fields.update({name: value if value is not None else "n/a" for name, value in context.items()})
-    return fields
-
-
-def _format_context(context: Mapping[str, object]) -> str:
-    """Expand diagnostic evidence without abbreviating collections of IDs."""
-    return " ".join(
-        f"{name}={_diagnostic_text(value) if value is not None else 'n/a'}"
-        for name, value in context.items()
-    )
-
-
-def _diagnostic_text(value: object, *, conversion: Literal["s", "r"] = "s") -> str:
-    """Render complete numeric evidence without Python's decimal conversion cap.
-
-    This is recursive diagnostic transport, so it must not log through itself.
-    Strings retain the caller's str/repr convention; containers quote their items.
-    """
-    if type(value) is int:
-        magnitude = abs(value)
-        chunks: list[int] = []
-        while magnitude >= 1_000_000_000:
-            magnitude, remainder = divmod(magnitude, 1_000_000_000)
-            chunks.append(remainder)
-        return ("-" if value < 0 else "") + str(magnitude) + "".join(
-            f"{chunk:09d}" for chunk in reversed(chunks)
-        )
-    if isinstance(value, Mapping):
-        return "{" + ", ".join(
-            f"{_diagnostic_text(key, conversion='r')}: {_diagnostic_text(item, conversion='r')}"
-            for key, item in value.items()
-        ) + "}"
-    if isinstance(value, (tuple, list)):
-        items = ", ".join(_diagnostic_text(item, conversion="r") for item in value)
-        if isinstance(value, tuple):
-            return "(" + items + ("," if len(value) == 1 else "") + ")"
-        return "[" + items + "]"
-    if is_dataclass(value) and not isinstance(value, type):
-        return type(value).__qualname__ + "(" + ", ".join(
-            f"{field.name}={_diagnostic_text(getattr(value, field.name), conversion='r')}"
-            for field in fields(value) if field.repr
-        ) + ")"
-    return repr(value) if conversion == "r" else str(value)
-
-
 # TODO (step 21): Serialize checked INFO mirrors and track confirmed trace appends.
 
 
@@ -132,18 +77,24 @@ class ActivityLog:
         """
         if level not in ("DEBUG", "WARNING", "ERROR"):
             raise ValueError("feedback level must be DEBUG, WARNING or ERROR; INFO is reserved")
+
         severity = getattr(logging, level)
-        if logger.isEnabledFor(severity):
-            fields = _context_fields({"run_directory": self.run_directory, **context}, severity)
-            details = _format_context({
-                name: value for name, value in fields.items()
-                if name not in DIAGNOSTIC_FIELDS
-            })
-            logger.log(
-                severity, "function=%s %s", function,
-                " ".join(part for part in (message, details) if part),
-                extra={name: value for name, value in fields.items() if name in DIAGNOSTIC_FIELDS},
-            )
+        if not logger.isEnabledFor(severity):
+            return
+
+        context_fields = _context_fields({"run_directory": self.run_directory, **context}, severity)
+        details = _format_context({
+            name: value for name, value in context_fields.items()
+            if name not in DIAGNOSTIC_FIELDS
+        })
+        logger.log(
+            severity, "function=%s %s", function,
+            " ".join(part for part in (message, details) if part),
+            extra={
+                name: value for name, value in context_fields.items()
+                if name in DIAGNOSTIC_FIELDS
+            },
+        )
 
     def mark_incomplete(self, reason: str, context: Mapping[str, object]) -> None:
         """Report INCOMPLETE at ERROR with the last confirmed trace context."""
@@ -152,3 +103,77 @@ class ActivityLog:
             f"action=aborted result=INCOMPLETE reason={reason!r}",
             {"last_confirmed_trace_line": "n/a", **context},
         )
+
+
+def _context_fields(
+    context: Mapping[str, object], level: int = logging.ERROR,
+) -> dict[str, object]:
+    """Omit unavailable DEBUG evidence; retain failure placeholders and caller data."""
+    if level < logging.WARNING:
+        return {
+            name: value for name, value in context.items()
+            if value is not None and not (isinstance(value, str) and value == "n/a")
+        }
+
+    context_fields: dict[str, object] = dict.fromkeys(DIAGNOSTIC_FIELDS, "n/a")
+    context_fields.update({
+        name: value if value is not None else "n/a"
+        for name, value in context.items()
+    })
+    return context_fields
+
+
+def _format_context(context: Mapping[str, object]) -> str:
+    """Expand diagnostic evidence without abbreviating collections of IDs."""
+    return " ".join(
+        f"{name}={_diagnostic_text(value) if value is not None else 'n/a'}"
+        for name, value in context.items()
+    )
+
+
+def _diagnostic_text(value: object, *, conversion: Literal["s", "r"] = "s") -> str:
+    """Render complete numeric evidence without Python's decimal conversion cap.
+
+    This is recursive diagnostic transport, so it must not log through itself.
+    Strings retain the caller's str/repr convention; containers quote their items.
+    """
+    if type(value) is int:
+        return _format_integer(value)
+
+    if isinstance(value, Mapping):
+        return "{" + ", ".join(
+            f"{_diagnostic_text(key, conversion='r')}: {_diagnostic_text(item, conversion='r')}"
+            for key, item in value.items()
+        ) + "}"
+
+    if isinstance(value, (tuple, list)):
+        return _format_sequence(value)
+
+    if is_dataclass(value) and not isinstance(value, type):
+        return type(value).__qualname__ + "(" + ", ".join(
+            f"{field.name}={_diagnostic_text(getattr(value, field.name), conversion='r')}"
+            for field in fields(value) if field.repr
+        ) + ")"
+
+    return repr(value) if conversion == "r" else str(value)
+
+
+def _format_integer(value: int) -> str:
+    """Convert bounded decimal chunks without changing the process-wide limit."""
+    magnitude = abs(value)
+    chunks: list[int] = []
+    while magnitude >= 1_000_000_000:
+        magnitude, remainder = divmod(magnitude, 1_000_000_000)
+        chunks.append(remainder)
+
+    sign = "-" if value < 0 else ""
+    trailing_digits = "".join(f"{chunk:09d}" for chunk in reversed(chunks))
+    return sign + str(magnitude) + trailing_digits
+
+
+def _format_sequence(value: tuple[object, ...] | list[object]) -> str:
+    items = ", ".join(_diagnostic_text(item, conversion="r") for item in value)
+    if isinstance(value, tuple):
+        trailing_comma = "," if len(value) == 1 else ""
+        return "(" + items + trailing_comma + ")"
+    return "[" + items + "]"

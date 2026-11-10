@@ -27,7 +27,9 @@ class Location:
 
     def __post_init__(self) -> None:
         """Validate coordinates; the reader owns canonical zones and membership."""
-        for name, value in (("aisle", self.aisle), ("rack", self.rack), ("level", self.level)):
+        for name, value in (
+            ("aisle", self.aisle), ("rack", self.rack), ("level", self.level),
+        ):
             if type(value) is not int or value < 0:
                 raise ValueError(
                     f"Location {name} must be a nonnegative integer: "
