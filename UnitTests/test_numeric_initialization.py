@@ -1,7 +1,7 @@
 """Exercise numeric publication in fresh processes, without module resets.
 
-Workflow consumers remain pending their real owners. A public Truck instance
-tests its capacity query only; its stub constructor proves no state integration.
+Workflow consumers remain pending their real owners. Truck's direct capacity,
+contents and fullness checks do not prove future loading or state integration.
 """
 
 from __future__ import annotations
@@ -136,12 +136,20 @@ class NumericInitializationTests(unittest.TestCase):
                     else:
                         raise AssertionError('unknown attribute did not reject')
                 from warehouse.domain.truck import Truck
-                try:
-                    Truck('Tprobe').capacity_requests
-                except RuntimeError:
-                    pass
-                else:
-                    raise AssertionError('early capacity query accepted')
+                from warehouse.domain.fulfillment_request import FulfillmentRequest
+                from warehouse.domain.order import Order
+                truck = Truck('Tprobe')
+                request = FulfillmentRequest('supplied', 21, (Order('O1', 'Model', 'Blue', '1', '2'),), ('1', '2'))
+                for operation in (lambda: truck.capacity_requests, truck.is_full,
+                                  lambda: truck.record_request(request)):
+                    try:
+                        operation()
+                    except RuntimeError as error:
+                        assert 'before numeric initialization' in str(error)
+                    else:
+                        raise AssertionError('early capacity consumer accepted')
+                    assert truck.id == 'Tprobe' and truck.requests == []
+                    assert request.status.value == 'created'
                 assert before == (Path.cwd(), logging.getLogger().handlers[:],
                                   logging.getLogger('warehouse').handlers[:])
             """)
@@ -227,6 +235,22 @@ class NumericInitializationTests(unittest.TestCase):
                     self.assertTrue(all(alias.name not in expected for alias in node.names), module)
         self.assertEqual(declarations, {name: [owner] for name, owner in expected.items()})
 
+    def test_truck_capacity_rejects_zero_and_invalid_types_before_publication(self) -> None:
+        self.run_fresh("""
+            original = json.loads(path_a.read_text())
+            for invalid in (0, -1, True, False, 1.5, '5'):
+                document = json.loads(json.dumps(original))
+                document['warehouse']['truck_capacity_requests'] = invalid
+                path_a.write_text(json.dumps(document))
+                try:
+                    ConfigLoader().load_config(path_a)
+                except ValueError as error:
+                    assert 'truck_capacity_requests' in str(error)
+                else:
+                    raise AssertionError('invalid truck capacity accepted')
+                assert_unpublished()
+        """)
+
     def test_missing_and_invalid_required_settings_reject_before_publication(self) -> None:
         self.run_fresh("""
             original = json.loads(path_a.read_text())
@@ -264,6 +288,16 @@ class NumericInitializationTests(unittest.TestCase):
             assert_values(config)
             assert config.first_request_number == 10 ** 5000 - 1
             assert modules['warehouse.domain.truck'].Truck('Tprobe').capacity_requests == 10 ** 5000 - 1
+            from warehouse.domain.fulfillment_request import FulfillmentRequest
+            from warehouse.domain.order import Order
+            truck = modules['warehouse.domain.truck'].Truck('Tlarge')
+            request = FulfillmentRequest('supplied', 21, (Order('O1', 'Model', 'Blue', '1', '2'),), ('1', '2'))
+            with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+                _configure_console_logging(logging.DEBUG)
+                truck.record_request(request)
+            assert len(out.getvalue().splitlines()) == 1 and err.getvalue() == ''
+            assert 'capacity_requests=' + '9' * 5000 in out.getvalue()
+            assert truck.requests[0] is request and truck.is_full() is False
             assert sys.get_int_max_str_digits() == limit
         """, reverse=True)
 

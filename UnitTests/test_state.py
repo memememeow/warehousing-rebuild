@@ -24,6 +24,7 @@ from unittest.mock import patch
 
 from UnitTests import assert_callable_traces, isolated_console_logging
 from UnitTests.test_configuration import write_configuration
+from UnitTests.test_trucks import run_truck_process
 from warehouse.configuration.warehouse_config import WarehouseConfig
 from warehouse.domain.fulfillment_request import FulfillmentRequest
 from warehouse.domain.location import Location
@@ -233,6 +234,8 @@ class ConstructorDiagnosticTests(unittest.TestCase):
     def test_retained_debug_event_inventory_matches_sources_context_and_individual_emissions(self) -> None:
         # Count source sites, including the two distinct SKU rejection branches.
         expected = Counter({
+            ("warehouse.domain.truck.Truck.record_request", "truck.record_request", "rejected"): 1,
+            ("warehouse.domain.truck.Truck.record_request", "truck.record_request", "recorded"): 1,
             ("warehouse.domain.fulfillment_request.FulfillmentRequest.transition_to", "fulfillment_request.transition_to", "rejected"): 1,
             ("warehouse.domain.fulfillment_request.FulfillmentRequest.transition_to", "fulfillment_request.transition_to", "transitioned"): 1,
             ("warehouse.file_io.output_writer.OutputWriter.create_output_directory", "output_writer.create_output_directory", "created"): 1,
@@ -306,9 +309,26 @@ class ConstructorDiagnosticTests(unittest.TestCase):
                 request.transition_to(RequestStatus.PICKING)
             request.transition_to(RequestStatus.WAITING_FOR_PICKING)
         lines = stdout.getvalue().splitlines()
+        # A fresh real configuration keeps the suite process's constants unbound.
+        truck_events = run_truck_process("""
+            _configure_console_logging(logging.DEBUG)
+            truck = Truck('T013')
+            request = truck_request(21)
+            truck.record_request(request)
+            with case.assertRaises(ValueError): truck.record_request(request)
+            with case.assertRaises(ValueError): truck.record_request(truck_request(22, 1))
+        """, capacity=1)
+        self.assertEqual(truck_events.returncode, 0, truck_events.stdout + truck_events.stderr)
+        self.assertEqual(truck_events.stderr, '')
+        lines.extend(truck_events.stdout.splitlines())
         self.assertEqual(len(lines), len(set(lines)))
         emitted = Counter()
         contexts = {
+            "truck.record_request": (
+                "truck_id=T013", "request_id=R202611110930-", "request_sequence=",
+                "order_ids=", "capacity_requests=1", "request_count_before=",
+                "request_count_after=1", "status_before=created", "status_after=created",
+            ),
             "fulfillment_request.transition_to": (
                 "request_id=R202611110930-021", "request_sequence=21", "order_ids=('O0137',)",
                 "sku_evidence=('001', '090')", "status_before=created", "status_after=",
@@ -333,6 +353,18 @@ class ConstructorDiagnosticTests(unittest.TestCase):
             self.assertNotIn("=n/a", line)
             for evidence in contexts[label]:
                 self.assertIn(evidence, line)
+            if label == "truck.record_request":
+                if action == "recorded":
+                    self.assertIn("request_count_before=0", line)
+                else:
+                    self.assertEqual(action, "rejected")
+                    self.assertIn("request_count_before=1", line)
+                    reason = "duplicate_request" if "request_sequence=21 " in line else "capacity_exceeded"
+                    self.assertIn(f"reason={reason}", line)
+                if "request_sequence=21 " in line:
+                    self.assertIn("order_ids=('O0021-0', 'O0021-1', 'O0021-2', 'O0021-3')", line)
+                else:
+                    self.assertIn("order_ids=('O0022-0',)", line)
             if label == "fulfillment_request.transition_to":
                 if action == "rejected":
                     for evidence in ("reason=illegal_transition", "requested_status=picking", "status_after=created"):
@@ -352,6 +384,7 @@ class ConstructorDiagnosticTests(unittest.TestCase):
                     self.assertIn("error=", line)
         expected_emissions = Counter({(label, action): count for (identity, label, action), count in expected.items()})
         expected_emissions["config_loader._read_csv", "entry"] = 3
+        expected_emissions["truck.record_request", "rejected"] = 2
         self.assertEqual(emitted, expected_emissions)
 
     def test_logging_ownership_and_debug_option_stay_at_the_launcher_boundary(self) -> None:

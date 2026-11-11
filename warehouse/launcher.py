@@ -229,7 +229,10 @@ class _CheckedStreamHandler(logging.StreamHandler):
         record = copy(record)
         fields = _context_fields({
             field: record.__dict__[field]
-            for field in DIAGNOSTIC_FIELDS
+            for field in (
+                *DIAGNOSTIC_FIELDS,
+                "capacity_requests", "request_count_before", "request_count_after",
+            )
             if field in record.__dict__
         }, record.levelno)
         context = _format_context(fields) if record.levelno != logging.INFO else ""
@@ -290,7 +293,7 @@ def _report_pending_simulation(order_count: int, context: Mapping[str, object]) 
             "function=launcher.warehouse action=aborted "
             "configuration validated; complete order preflight and numeric initialization validated; "
             "simulation startup is not implemented; "
-            "reason=pending_simulation deferred_steps=10-23 order_count=%d; "
+            "reason=pending_simulation deferred_steps=11-23 order_count=%d; "
             "config supplied=%r, resolved=%r; orders supplied=%r, resolved=%r "
             "result=INCOMPLETE last_confirmed_trace_line=n/a",
             order_count, context["config_supplied"], str(context["config_resolved"]),
