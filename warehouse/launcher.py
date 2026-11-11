@@ -18,8 +18,9 @@ Omitting --debug or supplying --debug F suppresses DEBUG details only.
 Planned usage command: python3.15 warehouse --help
 CONFIG and ORDERS are argument placeholders. CLI parsing, path resolution,
 console logging, complete configuration/order preflight and numeric owner
-initialization and exclusive run-folder creation are implemented. State,
-application execution, operational trace and final publication remain deferred.
+initialization, state composition and exclusive run-folder creation are
+implemented. Application execution, operational trace and final publication
+remain deferred.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from pathlib import Path
 
 from warehouse.configuration.config_loader import ConfigLoader
 from warehouse.configuration.warehouse_config import WarehouseConfig
-from warehouse.domain import truck
+from warehouse.domain import truck, warehouse_state
 from warehouse.file_io.activity_log import (
     DIAGNOSTIC_FIELDS,
     _context_fields,
@@ -53,7 +54,7 @@ logger = logging.getLogger("warehouse")
 
 
 def warehouse(argv: Sequence[str]) -> int:
-    """Preflight inputs, initialize numeric owners once and create the run folder.
+    """Preflight inputs, publish numeric owners, compose state and create the folder.
 
     Configure logging before preflight and numeric initialization.
     Preserve checked INFO command mirrors in both modes and use direct stderr
@@ -70,7 +71,7 @@ def warehouse(argv: Sequence[str]) -> int:
         _report_logging_failure(error, context)
         return 1
 
-    # TODO (steps 11, 20-23): Construct state/dependencies, run and publish results.
+    # TODO (steps 20-23): Construct application dependencies, run and publish results.
     try:
         # Parsing and transport setup stay silent; help must stop before startup.
         if logger.isEnabledFor(logging.DEBUG):
@@ -107,6 +108,12 @@ def warehouse(argv: Sequence[str]) -> int:
         return 1
 
     try:
+        state = warehouse_state.WarehouseState(config)
+    except (OSError, ValueError, RuntimeError) as error:
+        _report_startup_failure(error, "state_construction_failed", context)
+        return 1
+
+    try:
         files = OutputWriter()
         output_directory = files.create_output_directory(working_directory, started_at)
         context["run_directory"] = output_directory
@@ -117,7 +124,8 @@ def warehouse(argv: Sequence[str]) -> int:
     # Retain orders for run (20), files/output_directory for application
     # construction (20), and the selected destination for ActivityLog (21).
     # started_at remains the aware run-start evidence; later request times
-    # must be captured freshly. State construction belongs to Step 11.
+    # must be captured freshly. The composed state is retained for Step 20;
+    # construction alone does not execute any workflow or publish results.
     _report_pending_simulation(len(orders), context)
     return 1
 
@@ -292,8 +300,8 @@ def _report_pending_simulation(order_count: int, context: Mapping[str, object]) 
         logger.error(
             "function=launcher.warehouse action=aborted "
             "configuration validated; complete order preflight and numeric initialization validated; "
-            "simulation startup is not implemented; "
-            "reason=pending_simulation deferred_steps=11-23 order_count=%d; "
+            "state composed; simulation execution is not implemented; "
+            "reason=pending_simulation deferred_steps=12-23 order_count=%d; "
             "config supplied=%r, resolved=%r; orders supplied=%r, resolved=%r "
             "result=INCOMPLETE last_confirmed_trace_line=n/a",
             order_count, context["config_supplied"], str(context["config_resolved"]),

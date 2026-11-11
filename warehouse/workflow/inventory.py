@@ -56,7 +56,14 @@ class Inventory:
 
     def __init__(self, config: WarehouseConfig) -> None:
         """Initialize mapped locations at default stock, then apply overrides."""
-        ...
+        if "DEFAULT_STOCK" not in globals():
+            raise RuntimeError("inventory.DEFAULT_STOCK read before numeric initialization")
+
+        self.quantities = {
+            location: DEFAULT_STOCK for location in config.location_map.values()
+        }
+        self.quantities.update(config.initial_stock)
+        self.replenishment_queue = deque()
 
     def quantity_at(self, location: Location) -> int:
         """Read a known location's quantity without adding inventory entries."""

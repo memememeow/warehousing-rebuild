@@ -377,7 +377,7 @@ class LauncherTests(unittest.TestCase):
                             errors = [line for line in result.stderr.splitlines() if line.startswith('[ERROR] ')]
                             self.assertEqual(len(errors), 1)
                             self.assertIn(
-                                "simulation startup is not implemented", result.stderr
+                                "state composed; simulation execution is not implemented", result.stderr
                             )
                             self.assertIn(f"supplied={argv[1]!r}", result.stderr)
                             self.assertIn(f"resolved={str(config)!r}", result.stderr)

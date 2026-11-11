@@ -52,7 +52,9 @@ class SequencingWorkflow:
 
     def __init__(self, employees: frozenset[str]) -> None:
         """Establish empty sequencing collections for configured sequencer names."""
-        ...
+        self.employees = employees
+        self.sequencing_queue = deque()
+        self.sequencer_assignments = {}
 
     def enqueue_request(self, request: FulfillmentRequest) -> None:
         """Queue an already-ready canonical request without rewriting its status."""

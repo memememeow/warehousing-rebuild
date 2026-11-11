@@ -19,6 +19,7 @@ from typing import Final
 from warehouse.configuration.warehouse_config import WarehouseConfig
 from warehouse.domain.fulfillment_request import FulfillmentRequest
 from warehouse.domain.truck import Truck
+from warehouse.workflow import order_registry
 
 FIRST_TRUCK_NUMBER: Final[int]
 TRUCK_MINIMUM_DIGITS: Final[int]
@@ -60,13 +61,22 @@ class LoadingWorkflow:
     dispatched_trucks: list[Truck]
 
     def __init__(self, config: WarehouseConfig) -> None:
-        """Establish loading collections, the first truck and numeric expectations.
+        """Retain configuration and establish empty collections and numeric starts.
 
-        Step 19 must start next_request_number from the module-qualified
-        order_registry.FIRST_REQUEST_NUMBER, then advance it independently.
-        Truck counters use this module's constants and persist across dispatch.
+        Step 19 creates the first truck and advances next_truck_number only on
+        successful creation. It must then preserve the independent request
+        expectation across dispatch and use this module's truck ID constants.
         """
-        ...
+        if "FIRST_TRUCK_NUMBER" not in globals():
+            raise RuntimeError("loading_workflow.FIRST_TRUCK_NUMBER read before numeric initialization")
+
+        next_request_number = order_registry.FIRST_REQUEST_NUMBER
+        self.config = config
+        self.loading_queue = {}
+        self.loader_assignments = {}
+        self.next_request_number = next_request_number
+        self.next_truck_number = FIRST_TRUCK_NUMBER
+        self.dispatched_trucks = []
 
     def enqueue_request(self, request: FulfillmentRequest) -> None:
         """Buffer an already-ready request under its independent numeric sequence."""

@@ -1,7 +1,8 @@
 """Exercise numeric publication in fresh processes, without module resets.
 
-Workflow consumers remain pending their real owners. Truck's direct capacity,
-contents and fullness checks do not prove future loading or state integration.
+Constructor counters and initial stock now consume published constants. Later
+workflow operations remain pending their real owners. Truck's direct capacity,
+contents and fullness checks do not prove future loading integration.
 """
 
 from __future__ import annotations
@@ -202,6 +203,42 @@ class NumericInitializationTests(unittest.TestCase):
                     assert published() == before
             """, reverse=reverse)
 
+    def test_constructor_consumers_reject_early_reads_and_use_published_owner_starts(self) -> None:
+        for reverse in (False, True):
+            self.run_fresh("""
+                from warehouse.domain.warehouse_state import WarehouseState
+                from warehouse.workflow.inventory import Inventory
+                from warehouse.workflow.order_registry import OrderRegistry
+                from warehouse.workflow.loading_workflow import LoadingWorkflow
+                config = ConfigLoader().load_config(path_a)
+                for owner in (Inventory, OrderRegistry, LoadingWorkflow, WarehouseState):
+                    try:
+                        owner(config)
+                    except RuntimeError as error:
+                        assert 'before numeric initialization' in str(error), str(error)
+                    else:
+                        raise AssertionError(owner)
+                    assert_unpublished()
+                # A published local truck start cannot hide the unpublished
+                # cross-module request start. No constant is imported by value.
+                modules['warehouse.workflow.loading_workflow'].initialize_loading_constants(config)
+                try:
+                    LoadingWorkflow(config)
+                except RuntimeError as error:
+                    assert 'order_registry.FIRST_REQUEST_NUMBER' in str(error)
+                else:
+                    raise AssertionError('unpublished registry start accepted')
+                for name, module in modules.items():
+                    if name != 'warehouse.workflow.loading_workflow':
+                        getattr(module, INITIALIZERS[name])(config)
+                state = WarehouseState(config)
+                assert_values(config)
+                assert state.orders.next_order_number == modules['warehouse.workflow.order_registry'].FIRST_ORDER_NUMBER
+                assert state.orders.next_request_number == state.loading.next_request_number == modules['warehouse.workflow.order_registry'].FIRST_REQUEST_NUMBER
+                assert state.loading.next_truck_number == modules['warehouse.workflow.loading_workflow'].FIRST_TRUCK_NUMBER
+                assert not hasattr(state.loading, 'current_truck')
+            """, reverse=reverse)
+
     def test_truck_capacity_uses_constant_through_public_read_only_property(self) -> None:
         self.run_fresh("""
             config = ConfigLoader().load_config(path_a)
@@ -391,7 +428,17 @@ class NumericInitializationTests(unittest.TestCase):
                             orders_path.write_text({contents!r}, encoding='utf-8')
                             before = {{p: p.read_bytes() if p.is_file() else None
                                       for p in path_a.parent.rglob('*')}}
-                            events, returned, lines = [], [], []
+                            events, returned, lines, states = [], [], [], []
+                            def profile(frame, event, value):
+                                if frame.f_globals.get('__name__') == 'warehouse.domain.warehouse_state' and frame.f_code.co_name == '__init__':
+                                    if event == 'call':
+                                        assert events == ['config', 'orders', 'numeric'], events
+                                        assert frame.f_locals['config'] is returned[0]
+                                        assert_values(returned[0])
+                                        events.append('state')
+                                    elif event == 'return':
+                                        states.append(frame.f_locals['self'])
+                                        assert states[-1].orders.config is states[-1].loading.config is returned[0]
                             real_load = ConfigLoader.load_config
                             real_read = OrderReader.read_orders
                             real_parse = OrderReader.parse_order
@@ -422,7 +469,7 @@ class NumericInitializationTests(unittest.TestCase):
                                 assert_values(config)
                                 events.append('numeric')
                             def create(writer, working_directory, started_at):
-                                assert events == ['config', 'orders', 'numeric']
+                                assert events == ['config', 'orders', 'numeric', 'state']
                                 assert_values(returned[0])
                                 assert started_at.utcoffset() is not None
                                 selected = real_create(writer, working_directory, started_at)
@@ -442,13 +489,17 @@ class NumericInitializationTests(unittest.TestCase):
                                 stack.enter_context(patch('warehouse.launcher._initialize_numeric_constants', initialize))
                                 stack.enter_context(patch.object(OutputWriter, 'create_output_directory', create))
                                 guards = [stack.enter_context(patch(target)) for target in (
-                                    'warehouse.domain.warehouse_state.WarehouseState',
                                     'warehouse.workflow.warehouse_application.WarehouseApplication.run',
                                     'os.chdir',
                                 )]
-                                assert warehouse(['--config', str(path_a), '--orders', str(orders_path), *{options!r}]) == 1
+                                sys.setprofile(profile)
+                                try:
+                                    assert warehouse(['--config', str(path_a), '--orders', str(orders_path), *{options!r}]) == 1
+                                finally:
+                                    sys.setprofile(None)
                                 for guard in guards: guard.assert_not_called()
-                            assert events == ['config', 'orders', 'numeric', 'folder'], events
+                            assert events == ['config', 'orders', 'numeric', 'state', 'folder'], events
+                            assert len(states) == 1
                             assert lines == list(range(1, {len(contents.splitlines())} + 1)), lines
                             assert_values(returned[0])
                             assert 'reason=pending_simulation' in err.getvalue()

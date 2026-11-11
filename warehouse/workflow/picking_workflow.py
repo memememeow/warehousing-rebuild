@@ -35,7 +35,10 @@ class PickingWorkflow:
 
     def __init__(self, employees: frozenset[str], location_map: LocationMap) -> None:
         """Retain configured picker names and shared read-only SKU locations."""
-        ...
+        self.employees = employees
+        self.location_map = location_map
+        self.picking_queue = deque()
+        self.picker_assignments = {}
 
     def enqueue_request(self, request: FulfillmentRequest) -> None:
         """Queue a newly created request and commit WAITING_FOR_PICKING status."""

@@ -72,7 +72,17 @@ class OrderRegistry:
 
     def __init__(self, config: WarehouseConfig) -> None:
         """Establish empty registries and counters from initialized owner constants."""
-        ...
+        for name in ("FIRST_ORDER_NUMBER", "FIRST_REQUEST_NUMBER"):
+            if name not in globals():
+                raise RuntimeError(f"order_registry.{name} read before numeric initialization")
+
+        self.config = config
+        self.accepted_orders = {}
+        self.pending_orders = deque()
+        self.requests = {}
+        self.next_order_number = FIRST_ORDER_NUMBER
+        self.next_request_number = FIRST_REQUEST_NUMBER
+        self.input_closed = False
 
     def accept_order(self, model: str, colour: str) -> Order:
         """Validate the product and both locations before allocating an order ID."""

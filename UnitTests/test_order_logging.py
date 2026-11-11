@@ -152,6 +152,7 @@ class OrderLoggingTests(unittest.TestCase):
             assert result == 1 and stream.hit
             after_numeric = 'reason=pending_simulation' in target
             assert calls == ([('warehouse.launcher', '_initialize_numeric_constants'),
+                              ('warehouse.domain.warehouse_state', '__init__'),
                               ('warehouse.file_io.output_writer', 'create_output_directory')]
                              if after_numeric else []), calls
             state = _numeric_initialization_state()

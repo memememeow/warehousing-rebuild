@@ -1,7 +1,7 @@
-"""Verify enums, catalog immutability and diagnostics; reserve composed state.
+"""Verify enums, catalog immutability and retained diagnostics.
 
-Future tests will verify the five state owners, shared request identity,
-collection isolation and informational replenisher readiness. Fixtures must
+Real constructor composition is covered in test_composition. Future workflow
+tests must verify shared request identity through actual handoffs. Fixtures
 initialize numeric settings once before constructing mutable state.
 """
 
@@ -403,6 +403,3 @@ class ConstructorDiagnosticTests(unittest.TestCase):
                                 self.assertNotIn("debug", field.target.id.casefold())
                     if isinstance(node, ast.TypeAlias):
                         self.assertNotIn("debug", ast.unparse(node.value).casefold())
-
-
-# TODO: Add composition smoke tests when WarehouseState construction is implemented.

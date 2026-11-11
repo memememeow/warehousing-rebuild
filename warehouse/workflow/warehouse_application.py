@@ -81,7 +81,11 @@ class WarehouseApplication:
         output_directory: Path,
     ) -> None:
         """Retain shared state and explicit routing, logging and output dependencies."""
-        ...
+        self.state = state
+        self.planner = planner
+        self.files = files
+        self.log = log
+        self.output_directory = output_directory
 
     def run(self, orders: Sequence[OrderLine]) -> None:
         """Process full batches sequentially, close input and drain before publication.

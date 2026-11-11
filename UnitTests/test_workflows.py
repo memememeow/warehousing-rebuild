@@ -64,6 +64,8 @@ class SharedEnumIntegrationTests(unittest.TestCase):
             "warehouse.domain.fulfillment_request", "warehouse.domain.warehouse_state",
             "warehouse.workflow.warehouse_application", "warehouse.workflow.picking_workflow",
             "warehouse.workflow.sequencing_workflow", "warehouse.workflow.loading_workflow",
+            "warehouse.workflow.inventory", "warehouse.workflow.order_registry",
+            "warehouse.domain.truck",
         )
         script = """
 import importlib
@@ -75,12 +77,23 @@ logger = logging.getLogger('warehouse')
 root_logger = logging.getLogger()
 before = (logger.handlers[:], logger.level, logger.propagate, logger.disabled,
           root_logger.handlers[:], root_logger.level)
-with patch('pathlib.Path.cwd') as cwd, patch('os.chdir') as chdir, patch('os.mkdir') as mkdir:
-    for name in sys.argv[2:]:
-        importlib.import_module(name)
-    cwd.assert_not_called()
-    chdir.assert_not_called()
-    mkdir.assert_not_called()
+def profile(frame, event, value):
+    if event == 'call' and frame.f_globals.get('__name__', '').startswith('warehouse'):
+        assert frame.f_code.co_name != '__init__', 'import-time construction'
+        assert not frame.f_code.co_name.startswith('initialize_'), 'import-time numeric publication'
+with patch('pathlib.Path.cwd') as cwd, patch('os.chdir') as chdir, patch('os.mkdir') as mkdir, patch('builtins.open') as opened, patch('io.open') as path_open:
+    sys.setprofile(profile)
+    try:
+        for name in sys.argv[2:]:
+            importlib.import_module(name)
+    finally:
+        sys.setprofile(None)
+    for boundary in (cwd, chdir, mkdir, opened, path_open): boundary.assert_not_called()
+from warehouse.workflow import inventory, order_registry, sequencing_workflow, loading_workflow
+from warehouse.domain import truck
+owners = (inventory, order_registry, sequencing_workflow, loading_workflow, truck)
+assert sum(len(module.__annotations__) for module in owners) == 11
+assert all(name not in vars(module) for module in owners for name in module.__annotations__)
 from warehouse.domain.worker_type import WorkerType
 from warehouse.domain.request_status import RequestStatus
 from warehouse.configuration import warehouse_config

@@ -805,7 +805,7 @@ class LauncherLoggingFailureTests(unittest.TestCase):
                 self.assertIn(f"stdout {operation} failed", fallback)
                 self.assertIn("result=INCOMPLETE", fallback)
                 self.assertIn("last_confirmed_trace_line=n/a", fallback)
-                self.assertNotIn("simulation startup is not implemented", fallback)
+                self.assertNotIn("state composed; simulation execution is not implemented", fallback)
 
     def test_transient_stderr_failure_uses_fallback_in_all_modes(self) -> None:
         for debug in ([], ["--debug", "F"], ["--debug", "T"]):
