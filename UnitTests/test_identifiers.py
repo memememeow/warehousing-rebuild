@@ -1,4 +1,4 @@
-"""Verify run-folder local times; reserve identifier-allocation coverage.
+"""Verify retained request identity and run-folder times; reserve ID allocation.
 
 Future cases verify independent counters, minimum widths, acceptance-only
 allocation, aware datetime requirements and daylight-saving transitions.
@@ -19,6 +19,72 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+
+from UnitTests import isolated_console_logging
+from warehouse.domain.fulfillment_request import FulfillmentRequest
+from warehouse.domain.order import Order
+from warehouse.domain.request_status import RequestStatus
+
+
+class RequestIdentityAndSkuTests(unittest.TestCase):
+    """Supplied identifiers are data; allocation and time formatting remain Step 14."""
+
+    def setUp(self) -> None:
+        self.enterContext(isolated_console_logging())
+
+    def test_id_and_sequence_are_retained_independently_without_parsing(self) -> None:
+        order = Order('O0037', 'Model', 'Blue', '001', '090')
+        for request_id, sequence in (('R202611110930-021', 37), ('unchanged identity', 2)):
+            request = FulfillmentRequest(request_id, sequence, (order,), ('001', '090'))
+            self.assertEqual(request.id, request_id)
+            self.assertEqual(request.sequence, sequence)
+            request.transition_to(RequestStatus.WAITING_FOR_PICKING)
+            self.assertEqual(request.id, request_id)
+            self.assertEqual(request.sequence, sequence)
+            self.assertIs(request.orders[0], order)
+
+    def test_loading_tuples_for_one_two_three_and_four_orders_preserve_occurrences(self) -> None:
+        pairs = (('001', '090'), ('002', '080'), ('001', '090'), ('004', '060'))
+        expected = {
+            1: ('001', '090'),
+            2: ('001', '090', '002', '080'),
+            3: ('001', '090', '002', '080', '001', '090'),
+            4: ('001', '090', '002', '080', '001', '090', '004', '060'),
+        }
+        for count in (1, 2, 3, 4):
+            with self.subTest(count=count):
+                orders = tuple(Order(f'O{i + 1:04d}', 'MoDeL', 'bLuE', *pair)
+                               for i, pair in enumerate(pairs[:count]))
+                evidence = tuple(front for front, back in pairs[:count]) + tuple(
+                    back for front, back in pairs[:count])
+                request = FulfillmentRequest('R202611110930-021', 21, orders, evidence)
+                stored_orders, stored_evidence = request.orders, request.correct_sku_order
+                for repeat in range(3):
+                    self.assertEqual(request.loading_skus(), expected[count], repeat)
+                    self.assertIs(request.orders, stored_orders)
+                    self.assertIs(request.correct_sku_order, stored_evidence)
+                    self.assertEqual(request.correct_sku_order, evidence)
+                    for original, retained in zip(orders, request.orders, strict=True):
+                        self.assertIs(original, retained)
+                        self.assertEqual((retained.model, retained.colour), ('MoDeL', 'bLuE'))
+
+    def test_loading_uses_stored_evidence_with_repeats_across_both_halves(self) -> None:
+        order = Order('O0001', 'Model', 'Blue', '7', '8')
+        request = FulfillmentRequest('kept', 1, (order, order, order),
+                                     ('001', '001', '002', '001', '002', '001'))
+        self.assertEqual(request.loading_skus(), ('001', '001', '001', '002', '002', '001'))
+        self.assertEqual(request.correct_sku_order, ('001', '001', '002', '001', '002', '001'))
+        self.assertEqual((order.front_sku, order.back_sku), ('7', '8'))
+
+    def test_unpaired_evidence_is_not_silently_truncated(self) -> None:
+        order = Order('O0001', 'Model', 'Blue', '1', '2')
+        request = FulfillmentRequest('kept', 1, (order,), ('1', '2', '3'))
+        evidence = request.correct_sku_order
+        with self.assertRaises(ValueError):
+            request.loading_skus()
+        self.assertIs(request.correct_sku_order, evidence)
+        self.assertIs(request.orders[0], order)
+        self.assertIs(request.status, RequestStatus.CREATED)
 
 
 class RunFolderLocalTimeTests(unittest.TestCase):

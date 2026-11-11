@@ -25,6 +25,7 @@ from unittest.mock import patch
 from UnitTests import assert_callable_traces, isolated_console_logging
 from UnitTests.test_configuration import write_configuration
 from warehouse.configuration.warehouse_config import WarehouseConfig
+from warehouse.domain.fulfillment_request import FulfillmentRequest
 from warehouse.domain.location import Location
 from warehouse.domain.order import Order
 from warehouse.domain.product_catalog import ProductCatalog
@@ -38,7 +39,7 @@ from warehouse.routing.route_planner import RoutePlanner
 
 
 class SharedEnumTests(unittest.TestCase):
-    """Protect the exact vocabulary without implementing request transitions."""
+    """Protect the exact vocabulary independently of request transition behavior."""
 
     def test_worker_type_has_exact_str_enum_contract(self) -> None:
         self.assertEqual(WorkerType.__bases__, (StrEnum,))
@@ -196,6 +197,10 @@ class ConstructorDiagnosticTests(unittest.TestCase):
                 _configure_console_logging(threshold)
                 location = Location("A", 0, 1, 2)
                 order = Order("O0001", "Model", "Blue", "1", "2")
+                request = FulfillmentRequest("R202611110930-021", 21, (order,), ("1", "2"))
+                self.assertIs(request.orders[0], order)
+                self.assertIs(request.status, RequestStatus.CREATED)
+                self.assertEqual(request.loading_skus(), ("1", "2"))
                 locations = {"1": location, "2": Location("A", 0, 1, 3)}
                 planner = RoutePlanner(locations)
                 catalog = ProductCatalog({("Model", "Blue"): ("1", "2")})
@@ -228,6 +233,8 @@ class ConstructorDiagnosticTests(unittest.TestCase):
     def test_retained_debug_event_inventory_matches_sources_context_and_individual_emissions(self) -> None:
         # Count source sites, including the two distinct SKU rejection branches.
         expected = Counter({
+            ("warehouse.domain.fulfillment_request.FulfillmentRequest.transition_to", "fulfillment_request.transition_to", "rejected"): 1,
+            ("warehouse.domain.fulfillment_request.FulfillmentRequest.transition_to", "fulfillment_request.transition_to", "transitioned"): 1,
             ("warehouse.file_io.output_writer.OutputWriter.create_output_directory", "output_writer.create_output_directory", "created"): 1,
             ("warehouse.launcher.warehouse", "launcher.warehouse", "entry"): 1,
             ("warehouse.file_io.order_reader.OrderReader.read_orders", "order_reader.read_orders", "validated"): 1,
@@ -293,10 +300,19 @@ class ConstructorDiagnosticTests(unittest.TestCase):
             ):
                 with self.assertRaises(ValueError):
                     ProductCatalog(products)
+            order = Order("O0137", "MoDeL", "bLuE", "001", "090")
+            request = FulfillmentRequest("R202611110930-021", 21, (order,), ("001", "090"))
+            with self.assertRaises(ValueError):
+                request.transition_to(RequestStatus.PICKING)
+            request.transition_to(RequestStatus.WAITING_FOR_PICKING)
         lines = stdout.getvalue().splitlines()
         self.assertEqual(len(lines), len(set(lines)))
         emitted = Counter()
         contexts = {
+            "fulfillment_request.transition_to": (
+                "request_id=R202611110930-021", "request_sequence=21", "order_ids=('O0137',)",
+                "sku_evidence=('001', '090')", "status_before=created", "status_after=",
+            ),
             "output_writer.create_output_directory": ("path=",),
             "launcher.warehouse": ("config_supplied=", "orders_supplied=", "console_level=DEBUG"),
             "order_reader.read_orders": ("path=",),
@@ -317,6 +333,13 @@ class ConstructorDiagnosticTests(unittest.TestCase):
             self.assertNotIn("=n/a", line)
             for evidence in contexts[label]:
                 self.assertIn(evidence, line)
+            if label == "fulfillment_request.transition_to":
+                if action == "rejected":
+                    for evidence in ("reason=illegal_transition", "requested_status=picking", "status_after=created"):
+                        self.assertIn(evidence, line)
+                else:
+                    self.assertEqual(action, "transitioned")
+                    self.assertIn("status_after=waiting_for_picking", line)
             if label == "order_reader.read_orders":
                 if action == "validated":
                     for evidence in ("byte_count=", "line_count=2", "order_count=1", "blank_count=1"):

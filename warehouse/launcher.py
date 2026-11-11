@@ -290,7 +290,7 @@ def _report_pending_simulation(order_count: int, context: Mapping[str, object]) 
             "function=launcher.warehouse action=aborted "
             "configuration validated; complete order preflight and numeric initialization validated; "
             "simulation startup is not implemented; "
-            "reason=pending_simulation deferred_steps=09-23 order_count=%d; "
+            "reason=pending_simulation deferred_steps=10-23 order_count=%d; "
             "config supplied=%r, resolved=%r; orders supplied=%r, resolved=%r "
             "result=INCOMPLETE last_confirmed_trace_line=n/a",
             order_count, context["config_supplied"], str(context["config_resolved"]),

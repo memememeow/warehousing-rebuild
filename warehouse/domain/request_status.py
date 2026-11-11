@@ -1,6 +1,6 @@
 """Define every permitted Phase 1 fulfillment lifecycle status.
 
-FulfillmentRequest will be the sole status writer. Active workflows must commit
+FulfillmentRequest is the sole status writer. Active workflows must commit
 status changes with their authoritative memberships; run failures preserve the
 last committed status rather than introducing another request stage.
 """
@@ -8,8 +8,6 @@ last committed status rather than introducing another request stage.
 from __future__ import annotations
 
 from enum import StrEnum
-
-# TODO: Enforce the permitted transition graph in FulfillmentRequest.
 
 
 class RequestStatus(StrEnum):

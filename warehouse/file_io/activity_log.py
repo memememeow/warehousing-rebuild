@@ -19,7 +19,8 @@ without recursively tracing its own emit/format functions.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, TextIO
@@ -38,6 +39,32 @@ DIAGNOSTIC_FIELDS: Final[tuple[str, ...]] = (
 
 
 # TODO (step 21): Serialize checked INFO mirrors and track confirmed trace appends.
+
+
+@contextmanager
+def buffered_diagnostics() -> Iterator[None]:
+    """Defer shared logger delivery until the outer sequential commit scope exits.
+
+    Retain raw records so formatting and checked transport follow in-memory
+    changes. The outermost filter captures nested scopes too. Remove this
+    scope's filter before delivery, including on failure; never replay records
+    after a transport failure. Exceptional exits retain evidence of earlier
+    committed changes and rejections, without rolling back application state.
+    Owners must validate related updates before entering their mutation phase.
+    """
+    records: list[logging.LogRecord] = []
+
+    def retain(record: logging.LogRecord) -> bool:
+        records.append(record)
+        return False
+
+    logger.addFilter(retain)
+    try:
+        yield
+    finally:
+        logger.removeFilter(retain)
+        for record in records:
+            logger.handle(record)
 
 
 class ActivityLog:
